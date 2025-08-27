@@ -23,6 +23,10 @@ const commands = [
         description: '高度なニュース分析情報を表示します（管理者限定）'
     },
     {
+        name: 'websearch',
+        description: 'WebSearch機能の統計と健全性をチェックします（管理者限定）'
+    },
+    {
         name: 'help',
         description: 'BOTの使い方を表示します'
     }

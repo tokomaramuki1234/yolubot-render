@@ -1,24 +1,5 @@
 const axios = require('axios');
-
-// WebSearchWrapper クラス（Claude CodeのWebSearch機能を利用）
-class WebSearchWrapper {
-    constructor() {
-        this.searchEnabled = true;
-    }
-
-    async search(query, options = {}) {
-        try {
-            // Claude CodeのWebSearch機能を利用するためのプロキシ関数
-            // 実際の環境ではClaude CodeのWebSearch APIを呼び出す
-            console.log(`WebSearch query: "${query}"`);
-            
-            // 暫定的にはダミーデータを返すが、実際にはWebSearch結果を返す
-            throw new Error('WebSearch not implemented in this environment');
-        } catch (error) {
-            throw error;
-        }
-    }
-}
+const WebSearchService = require('./webSearchService');
 
 class AdvancedNewsService {
     constructor() {
@@ -40,7 +21,7 @@ class AdvancedNewsService {
         };
 
         // WebSearch機能の初期化
-        this.webSearchWrapper = new WebSearchWrapper();
+        this.webSearchService = new WebSearchService();
     }
 
     // 1. 多層検索戦略の実装
@@ -145,29 +126,72 @@ class AdvancedNewsService {
         
         try {
             // 実際のWebSearch機能を試行
-            console.log(`Attempting real web search for: "${searchQuery}"`);
-            const searchResults = await this.webSearchWrapper.search(searchQuery, { maxResults: 3 });
+            console.log(`🔍 Attempting real web search for: "${searchQuery}"`);
+            
+            const searchOptions = {
+                maxResults: 3,
+                language: 'ja',
+                dateRestrict: hoursLimit <= 24 ? 'd1' : hoursLimit <= 168 ? 'w1' : null
+            };
+
+            const searchResults = await this.webSearchService.search(searchQuery, searchOptions);
             
             if (searchResults && searchResults.length > 0) {
+                console.log(`✅ Found ${searchResults.length} real web search results`);
                 return searchResults.map(result => ({
-                    title: result.title || `Latest ${keyword} News`,
-                    description: result.description || result.snippet || `Recent news about ${keyword}`,
+                    title: this.cleanTitle(result.title) || `Latest ${keyword} News`,
+                    description: this.cleanDescription(result.description || result.snippet) || `Recent news about ${keyword}`,
                     url: result.url || result.link,
-                    publishedAt: result.publishedDate || new Date(Date.now() - Math.random() * hoursLimit * 60 * 60 * 1000).toISOString(),
-                    source: this.extractSourceName(result.url || result.link) || 'Web Search',
+                    publishedAt: result.publishedDate || this.estimatePublishDate(hoursLimit),
+                    source: result.source || this.extractSourceName(result.url || result.link) || 'Web Search',
                     content: result.description || result.snippet || `Recent news about ${keyword}`,
                     searchKeyword: keyword,
-                    reliability: this.estimateWebSourceReliability(result.url || result.link)
+                    reliability: this.estimateWebSourceReliability(result.url || result.link),
+                    provider: result.provider || 'unknown'
                 }));
             }
         } catch (error) {
-            console.log(`Web search failed for "${searchQuery}": ${error.message}`);
-            console.log('Falling back to realistic search result simulation...');
+            console.log(`⚠️ Web search failed for "${searchQuery}": ${error.message}`);
+            console.log('📰 Falling back to enhanced simulation...');
         }
         
         // WebSearch失敗時のフォールバック - よりリアルな結果を生成
         const simulatedResults = await this.generateRealtimeSearchResults(keyword, hoursLimit);
         return simulatedResults;
+    }
+
+    /**
+     * タイトルのクリーニング（HTMLタグ、余分な文字等を除去）
+     */
+    cleanTitle(title) {
+        if (!title) return null;
+        return title
+            .replace(/<[^>]*>/g, '') // HTMLタグ除去
+            .replace(/\s+/g, ' ')    // 複数スペースを1つに
+            .trim()
+            .substring(0, 100);      // 長さ制限
+    }
+
+    /**
+     * 説明文のクリーニング
+     */
+    cleanDescription(description) {
+        if (!description) return null;
+        return description
+            .replace(/<[^>]*>/g, '') // HTMLタグ除去
+            .replace(/\s+/g, ' ')    // 複数スペースを1つに
+            .replace(/\.{3,}/g, '...') // 複数ドットを3つに
+            .trim()
+            .substring(0, 300);      // 長さ制限
+    }
+
+    /**
+     * 公開日の推定
+     */
+    estimatePublishDate(hoursLimit) {
+        const now = Date.now();
+        const randomOffset = Math.random() * hoursLimit * 60 * 60 * 1000;
+        return new Date(now - randomOffset).toISOString();
     }
 
     extractPublishDate(result) {
@@ -592,6 +616,20 @@ class AdvancedNewsService {
         }
         
         return 'general';
+    }
+
+    /**
+     * WebSearch統計情報取得
+     */
+    getWebSearchStats() {
+        return this.webSearchService.getUsageStats();
+    }
+
+    /**
+     * WebSearch健全性チェック
+     */
+    async checkWebSearchHealth() {
+        return await this.webSearchService.healthCheck();
     }
 
     getUrgencyMultiplier(category) {

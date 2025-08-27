@@ -69,6 +69,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             case 'analytics':
                 await handleAnalyticsCommand(interaction);
                 break;
+            case 'websearch':
+                await handleWebSearchCommand(interaction);
+                break;
             case 'help':
                 await handleHelpCommand(interaction);
                 break;
@@ -435,6 +438,64 @@ async function handleAnalyticsCommand(interaction) {
     }
 }
 
+async function handleWebSearchCommand(interaction) {
+    try {
+        // 管理者権限チェック
+        if (!interaction.member.permissions.has('Administrator')) {
+            await interaction.reply({ content: 'このコマンドは管理者限定です。', ephemeral: true });
+            return;
+        }
+
+        await interaction.deferReply();
+
+        // WebSearch統計と健全性チェック
+        const [stats, health] = await Promise.all([
+            newsService.getWebSearchStats(),
+            newsService.checkWebSearchHealth()
+        ]);
+
+        const embed = {
+            title: '🔍 WebSearch システム状況',
+            fields: [
+                {
+                    name: '📊 本日の使用量',
+                    value: `Serper: ${stats.today.serper}\nGoogle: ${stats.today.google}\nリセット日: ${stats.today.resetDate}`,
+                    inline: true
+                },
+                {
+                    name: '⚙️ プロバイダー設定',
+                    value: stats.providers.map(p => 
+                        `${p.name}: ${p.enabled ? '✅' : '❌'} (制限: ${p.rateLimit}, コスト: $${p.costPer1k}/1k)`
+                    ).join('\n'),
+                    inline: true
+                },
+                {
+                    name: '🗄️ キャッシュ状況',
+                    value: `キャッシュサイズ: ${stats.cacheSize}件`,
+                    inline: true
+                },
+                {
+                    name: '🏥 健全性チェック',
+                    value: Object.entries(health).map(([provider, status]) => 
+                        `${provider}: ${status.status === 'healthy' ? '✅' : status.status === 'disabled' ? '⚠️' : '❌'} ${status.reason || status.error || ''}`
+                    ).join('\n'),
+                    inline: false
+                }
+            ],
+            color: 0x00ff00,
+            timestamp: new Date().toISOString(),
+            footer: {
+                text: 'WebSearch統合システム v1.0'
+            }
+        };
+
+        await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error in websearch command:', error);
+        await interaction.editReply('WebSearch統計の取得中にエラーが発生しました。');
+    }
+}
+
 async function handleHelpCommand(interaction) {
     const embed = {
         title: '🤖 YOLUBot ヘルプ',
@@ -457,7 +518,7 @@ async function handleHelpCommand(interaction) {
             },
             {
                 name: '📋 スラッシュコマンド',
-                value: '`/news` - 手動でニュース取得（AI評価スコア付き）\n`/stats` - BOT統計\n`/preferences` - あなたの学習済み好み\n`/analytics` - 高度ニュース分析（管理者限定）\n`/permissions` - 権限チェック（管理者限定）\n`/help` - このヘルプ',
+                value: '`/news` - 手動でニュース取得（リアルタイムWeb検索）\n`/stats` - BOT統計\n`/preferences` - あなたの学習済み好み\n`/analytics` - 高度ニュース分析（管理者限定）\n`/websearch` - WebSearch統計（管理者限定）\n`/permissions` - 権限チェック（管理者限定）\n`/help` - このヘルプ',
                 inline: false
             },
             {
