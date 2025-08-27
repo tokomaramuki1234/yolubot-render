@@ -8,17 +8,24 @@
     "dev": "nodemon src/index.js",
     "deploy-commands": "node src/commands/deploy-commands.js"
   },
-  "keywords": ["discord", "bot", "gemini", "boardgames", "news"],
+  "keywords": [
+    "discord",
+    "bot",
+    "gemini",
+    "boardgames",
+    "news"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "discord.js": "^14.14.1",
     "@google/generative-ai": "^0.19.0",
-    "node-cron": "^3.0.3",
     "axios": "^1.6.2",
+    "discord.js": "^14.14.1",
     "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3",
+    "pg": "^8.11.3",
     "sqlite3": "^5.1.6",
-    "pg": "^8.11.3"
+    "xml2js": "^0.6.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

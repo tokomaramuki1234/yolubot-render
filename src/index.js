@@ -26,7 +26,7 @@ client.once(Events.ClientReady, async (c) => {
     // 権限チェックを実行
     await PermissionChecker.logPermissionCheck(client, process.env.CHANNEL_ID);
     
-    cron.schedule('0 9,18 * * *', async () => {
+    cron.schedule('0 7,19 * * *', async () => {
         console.log('Running scheduled news update...');
         await postBoardGameNews();
     });
@@ -93,8 +93,9 @@ async function postBoardGameNews() {
         }
 
         const newsArticles = await newsService.getBoardGameNews();
+        const articlesToPost = newsArticles.slice(0, 3);
         
-        for (const article of newsArticles.slice(0, 3)) {
+        for (const article of articlesToPost) {
             const summary = await geminiService.summarizeArticle(article);
             
             const embed = {
@@ -111,6 +112,9 @@ async function postBoardGameNews() {
             await channel.send({ embeds: [embed] });
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
+        
+        // 投稿済み記事としてマーク
+        await newsService.markArticlesAsPosted(articlesToPost);
     } catch (error) {
         console.error('Error posting news:', error);
     }

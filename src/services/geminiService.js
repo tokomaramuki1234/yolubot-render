@@ -10,16 +10,17 @@ class GeminiService {
         try {
             const prompt = `
 ボードゲームニュース記事の要約をお願いします。
-以下の記事を日本語で簡潔に要約してください（150文字以内）：
+以下の記事を日本語で簡潔に要約してください（300文字程度）：
 
 タイトル: ${article.title}
 内容: ${article.description || article.content || 'コンテンツなし'}
 URL: ${article.url}
 
 要約は以下の形式でお願いします：
-- 記事の要点を3つ以内の短文で
+- 記事の要点を具体的に説明
 - ボードゲーム愛好者にとって興味深い点を強調
-- 読みやすい日本語で
+- なぜこの情報が重要なのかを説明
+- 300文字程度の読みやすい日本語で
             `;
 
             const result = await this.model.generateContent(prompt);
