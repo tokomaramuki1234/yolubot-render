@@ -15,9 +15,9 @@ class NewsService {
         try {
             const articles = [];
             
-            // BoardGameGeek RSS フィードから記事を取得
-            const bggArticles = await this.getBGGBlogArticles();
-            articles.push(...bggArticles);
+            // 複数のボードゲームニュースソースから記事を取得
+            const newsArticles = await this.getBoardGameNewsFromMultipleSources();
+            articles.push(...newsArticles);
             
             // Reddit からボードゲーム情報を取得
             const redditArticles = await this.getRedditBoardGamePosts();
@@ -29,7 +29,15 @@ class NewsService {
 
             const uniqueArticles = this.removeDuplicates(articles);
             const filteredArticles = await this.filterUnpostedArticles(uniqueArticles);
-            return this.sortByRelevance(filteredArticles).slice(0, 10);
+            const relevantArticles = this.sortByRelevance(filteredArticles);
+            
+            // 実際のニュース記事が十分にない場合のみフォールバックを追加
+            if (relevantArticles.length < 3) {
+                const fallbackArticles = this.getFallbackNews();
+                relevantArticles.push(...fallbackArticles.slice(0, 3 - relevantArticles.length));
+            }
+            
+            return relevantArticles.slice(0, 10);
             
         } catch (error) {
             console.error('Error fetching board game news:', error);
@@ -73,9 +81,12 @@ class NewsService {
         return await this.searchAlternativeNews(query);
     }
 
-    async getBGGBlogArticles() {
+    async getBoardGameNewsFromMultipleSources() {
+        const articles = [];
+        
+        // Board Game Quest RSS
         try {
-            const response = await axios.get('https://boardgamegeek.com/rss/blog/1', {
+            const response = await axios.get('https://www.boardgamequest.com/feed/', {
                 timeout: 10000,
                 headers: {
                     'User-Agent': 'YOLUBot/1.0'
@@ -85,29 +96,59 @@ class NewsService {
             const parser = new xml2js.Parser();
             const result = await parser.parseStringPromise(response.data);
             
-            const articles = [];
             const items = result.rss?.channel?.[0]?.item || [];
             
-            for (const item of items.slice(0, 5)) {
+            for (const item of items.slice(0, 3)) {
                 const article = {
                     title: item.title?.[0] || '',
                     description: this.stripHtml(item.description?.[0] || ''),
                     url: item.link?.[0] || '',
                     publishedAt: new Date(item.pubDate?.[0]).toISOString(),
-                    source: 'BoardGameGeek Blog',
+                    source: 'Board Game Quest',
                     content: this.stripHtml(item.description?.[0] || '')
                 };
                 
-                if (article.title && article.url) {
+                if (article.title && article.url && !article.url.includes('boardgamegeek.com/')) {
                     articles.push(article);
                 }
             }
-            
-            return articles;
         } catch (error) {
-            console.warn('BGG RSS feed error:', error.message);
-            return [];
+            console.warn('Board Game Quest RSS error:', error.message);
         }
+        
+        // Meeple Mountain RSS
+        try {
+            const response = await axios.get('https://meeplemountain.com/feed/', {
+                timeout: 10000,
+                headers: {
+                    'User-Agent': 'YOLUBot/1.0'
+                }
+            });
+            
+            const parser = new xml2js.Parser();
+            const result = await parser.parseStringPromise(response.data);
+            
+            const items = result.rss?.channel?.[0]?.item || [];
+            
+            for (const item of items.slice(0, 2)) {
+                const article = {
+                    title: item.title?.[0] || '',
+                    description: this.stripHtml(item.description?.[0] || ''),
+                    url: item.link?.[0] || '',
+                    publishedAt: new Date(item.pubDate?.[0]).toISOString(),
+                    source: 'Meeple Mountain',
+                    content: this.stripHtml(item.description?.[0] || '')
+                };
+                
+                if (article.title && article.url && !article.url.includes('boardgamegeek.com/')) {
+                    articles.push(article);
+                }
+            }
+        } catch (error) {
+            console.warn('Meeple Mountain RSS error:', error.message);
+        }
+        
+        return articles;
     }
 
     async getRedditBoardGamePosts() {
