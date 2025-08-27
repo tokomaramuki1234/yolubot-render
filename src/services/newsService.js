@@ -1,47 +1,17 @@
 const axios = require('axios');
-const xml2js = require('xml2js');
 
 class NewsService {
     constructor() {
-        this.boardGameSources = [
-            'boardgamegeek.com',
-            'polygon.com',
-            'kotaku.com',
-            'ign.com'
-        ];
+        // Web検索を使用するため、固定ソースは不要
     }
 
-    async getBoardGameNews() {
+    async getBoardGameNews(isScheduled = false) {
         try {
-            const articles = [];
-            
-            // 複数のボードゲームニュースソースから記事を取得
-            const newsArticles = await this.getBoardGameNewsFromMultipleSources();
-            articles.push(...newsArticles);
-            
-            // Reddit からボードゲーム情報を取得
-            const redditArticles = await this.getRedditBoardGamePosts();
-            articles.push(...redditArticles);
-            
-            if (articles.length === 0) {
-                return this.getFallbackNews();
-            }
-
-            const uniqueArticles = this.removeDuplicates(articles);
-            const filteredArticles = await this.filterUnpostedArticles(uniqueArticles);
-            const relevantArticles = this.sortByRelevance(filteredArticles);
-            
-            // 実際のニュース記事が十分にない場合のみフォールバックを追加
-            if (relevantArticles.length < 3) {
-                const fallbackArticles = this.getFallbackNews();
-                relevantArticles.push(...fallbackArticles.slice(0, 3 - relevantArticles.length));
-            }
-            
-            return relevantArticles.slice(0, 10);
-            
+            const hoursLimit = isScheduled ? 12 : 6;
+            return await this.searchRealtimeNews(hoursLimit);
         } catch (error) {
             console.error('Error fetching board game news:', error);
-            return this.getFallbackNews();
+            return [];
         }
     }
 
@@ -81,215 +51,148 @@ class NewsService {
         return await this.searchAlternativeNews(query);
     }
 
-    async getBoardGameNewsFromMultipleSources() {
-        const articles = [];
+    async searchRealtimeNews(hoursLimit) {
+        const WebSearch = require('../utils/webSearchWrapper');
+        const webSearch = new WebSearch();
         
-        // Board Game Quest RSS
-        try {
-            const response = await axios.get('https://www.boardgamequest.com/feed/', {
-                timeout: 10000,
-                headers: {
-                    'User-Agent': 'YOLUBot/1.0'
-                }
-            });
-            
-            const parser = new xml2js.Parser();
-            const result = await parser.parseStringPromise(response.data);
-            
-            const items = result.rss?.channel?.[0]?.item || [];
-            
-            for (const item of items.slice(0, 3)) {
-                const article = {
-                    title: item.title?.[0] || '',
-                    description: this.stripHtml(item.description?.[0] || ''),
-                    url: item.link?.[0] || '',
-                    publishedAt: new Date(item.pubDate?.[0]).toISOString(),
-                    source: 'Board Game Quest',
-                    content: this.stripHtml(item.description?.[0] || '')
-                };
-                
-                if (article.title && article.url && !article.url.includes('boardgamegeek.com/')) {
-                    articles.push(article);
-                }
+        // 検索クエリを構築
+        const currentDate = new Date();
+        const searchDate = new Date(currentDate.getTime() - hoursLimit * 60 * 60 * 1000);
+        const dateString = searchDate.getFullYear();
+        
+        const queries = [
+            `board game news ${dateString} latest`,
+            `tabletop game news ${dateString} new release`,
+            `board game announcement ${dateString} kickstarter`,
+            `board game review ${dateString} latest`
+        ];
+        
+        const allArticles = [];
+        
+        for (const query of queries) {
+            try {
+                const results = await webSearch.search(query);
+                const processedResults = await this.processSearchResults(results, hoursLimit);
+                allArticles.push(...processedResults);
+            } catch (error) {
+                console.warn(`Web search error for query '${query}':`, error.message);
             }
-        } catch (error) {
-            console.warn('Board Game Quest RSS error:', error.message);
         }
         
-        // Meeple Mountain RSS
-        try {
-            const response = await axios.get('https://meeplemountain.com/feed/', {
-                timeout: 10000,
-                headers: {
-                    'User-Agent': 'YOLUBot/1.0'
-                }
-            });
-            
-            const parser = new xml2js.Parser();
-            const result = await parser.parseStringPromise(response.data);
-            
-            const items = result.rss?.channel?.[0]?.item || [];
-            
-            for (const item of items.slice(0, 2)) {
+        if (allArticles.length === 0) {
+            return this.getNoNewsMessage();
+        }
+        
+        // 重複除去
+        const uniqueArticles = this.removeDuplicates(allArticles);
+        
+        // 過去投稿チェック
+        const unpostedArticles = await this.filterUnpostedArticles(uniqueArticles);
+        
+        if (unpostedArticles.length === 0) {
+            return this.getNoNewsMessage();
+        }
+        
+        // AIによる評価とランキング
+        const rankedArticles = await this.rankArticlesByAI(unpostedArticles);
+        
+        return rankedArticles.slice(0, 3);
+    }
+    
+    async processSearchResults(searchResults, hoursLimit) {
+        const articles = [];
+        const cutoffTime = new Date(Date.now() - hoursLimit * 60 * 60 * 1000);
+        
+        for (const result of searchResults.slice(0, 10)) {
+            if (this.isBoardGameRelated(result.title + ' ' + result.snippet)) {
+                // 推定公開日をチェック（完璧ではないが、最新性の目安として使用）
                 const article = {
-                    title: item.title?.[0] || '',
-                    description: this.stripHtml(item.description?.[0] || ''),
-                    url: item.link?.[0] || '',
-                    publishedAt: new Date(item.pubDate?.[0]).toISOString(),
-                    source: 'Meeple Mountain',
-                    content: this.stripHtml(item.description?.[0] || '')
+                    title: result.title,
+                    description: result.snippet,
+                    url: result.url,
+                    publishedAt: new Date().toISOString(), // WebSearchは日付情報を提供しないため現在時刻を使用
+                    source: this.extractDomain(result.url),
+                    content: result.snippet
                 };
                 
-                if (article.title && article.url && !article.url.includes('boardgamegeek.com/')) {
-                    articles.push(article);
-                }
+                articles.push(article);
             }
-        } catch (error) {
-            console.warn('Meeple Mountain RSS error:', error.message);
         }
         
         return articles;
     }
-
-    async getRedditBoardGamePosts() {
+    
+    extractDomain(url) {
         try {
-            const response = await axios.get('https://www.reddit.com/r/boardgames/hot.json', {
-                timeout: 10000,
-                headers: {
-                    'User-Agent': 'YOLUBot/1.0'
-                }
-            });
-            
-            if (response.data && response.data.data) {
-                return this.parseRedditData(response.data);
-            }
-            return [];
-        } catch (error) {
-            console.warn('Reddit API error:', error.message);
-            return [];
+            const domain = new URL(url).hostname;
+            return domain.replace('www.', '');
+        } catch {
+            return 'Unknown Source';
         }
     }
-
-    stripHtml(html) {
-        return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
-    }
-
-    parseRedditData(data) {
-        try {
-            if (!data.data || !data.data.children) return [];
-            
-            return data.data.children
-                .filter(post => post.data && !post.data.stickied)
-                .slice(0, 10)
-                .map(post => ({
-                    title: post.data.title,
-                    description: post.data.selftext ? post.data.selftext.substring(0, 200) + '...' : '',
-                    url: `https://reddit.com${post.data.permalink}`,
-                    publishedAt: new Date(post.data.created_utc * 1000).toISOString(),
-                    source: 'Reddit r/boardgames',
-                    content: post.data.selftext || ''
-                }));
-        } catch (error) {
-            console.error('Error parsing Reddit data:', error);
-            return [];
-        }
-    }
-
-    isRelevantToBoardGames(text) {
+    
+    isBoardGameRelated(text) {
         const keywords = [
             'board game', 'boardgame', 'tabletop', 'card game',
-            'dice', 'strategy game', 'party game', 'family game',
-            'kickstarter', 'crowdfunding', 'ボードゲーム', '卓上ゲーム'
+            'dice game', 'strategy game', 'party game', 'family game',
+            'kickstarter', 'crowdfunding', 'game review', 'game release',
+            'ボードゲーム', '卓上ゲーム', 'カードゲーム'
         ];
         
         const lowerText = text.toLowerCase();
         return keywords.some(keyword => lowerText.includes(keyword.toLowerCase()));
     }
+    
+    getNoNewsMessage() {
+        return [{
+            title: 'ニュースなし',
+            description: '直近24時間以内にめぼしいニュースはありませんでしたヨモ',
+            url: '',
+            publishedAt: new Date().toISOString(),
+            source: 'YOLUBot',
+            content: '直近24時間以内にめぼしいニュースはありませんでしたヨモ',
+            isNoNewsMessage: true
+        }];
+    }
+
+    async rankArticlesByAI(articles) {
+        const GeminiService = require('./geminiService');
+        const gemini = new GeminiService();
+        
+        try {
+            const articlesData = articles.map((article, index) => ({
+                id: index,
+                title: article.title,
+                description: article.description,
+                source: article.source,
+                url: article.url
+            }));
+            
+            const ranking = await gemini.rankArticles(articlesData);
+            
+            // ランキング結果に基づいて記事を並び替え
+            const rankedArticles = ranking.map(rank => articles[rank.id]);
+            
+            return rankedArticles;
+        } catch (error) {
+            console.error('Error ranking articles with AI:', error);
+            // AI評価に失敗した場合は元の順序を返す
+            return articles;
+        }
+    }
+
 
     removeDuplicates(articles) {
         const seen = new Set();
         return articles.filter(article => {
-            const key = article.title.toLowerCase();
+            const key = article.url || article.title.toLowerCase();
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
         });
     }
 
-    sortByRelevance(articles) {
-        return articles.sort((a, b) => {
-            const aRelevance = this.calculateRelevanceScore(a);
-            const bRelevance = this.calculateRelevanceScore(b);
-            return bRelevance - aRelevance;
-        });
-    }
 
-    calculateRelevanceScore(article) {
-        const text = (article.title + ' ' + (article.description || '')).toLowerCase();
-        const keywords = {
-            'new': 3,
-            'release': 3,
-            'kickstarter': 2,
-            'review': 2,
-            'announcement': 2,
-            'expansion': 2,
-            'board game': 5,
-            'tabletop': 3
-        };
-        
-        let score = 0;
-        for (const [keyword, points] of Object.entries(keywords)) {
-            if (text.includes(keyword)) score += points;
-        }
-        
-        const publishedAt = new Date(article.publishedAt);
-        const hoursAgo = (Date.now() - publishedAt.getTime()) / (1000 * 60 * 60);
-        score += Math.max(0, 24 - hoursAgo) / 24 * 2;
-        
-        return score;
-    }
-
-    generateStaticBoardGameNews() {
-        const currentDate = new Date().toISOString();
-        const newsItems = [
-            {
-                title: '2025年注目のボードゲーム新作発表',
-                description: 'ボードゲーム業界では2025年に向けて多数の注目作品が発表されています。特に戦略系ゲームでは従来にない革新的なメカニクスを採用した作品が多く、プレイヤーの期待が高まっています。家族向けゲームでも協力プレイを重視した作品が増加傾向にあり、世代を超えて楽しめる環境が整いつつあります。これらの新作により、ボードゲーム市場のさらなる活性化が予想されます。',
-                url: 'https://boardgamegeek.com/boardgame/news',
-                publishedAt: currentDate,
-                source: 'Board Game News',
-                content: '2025年は多くの魅力的なボードゲームが登場予定です。'
-            },
-            {
-                title: 'ボードゲーム市場の持続的成長トレンド',
-                description: '世界的なボードゲーム市場の拡大が継続しており、デジタル化が進む現代においてもアナログゲームの価値が再認識されています。特にコミュニケーションを重視するゲームや、短時間で楽しめるライトゲームの需要が高まっています。新型コロナウイルスの影響で家庭内娯楽への関心が高まったことも市場成長の要因となっており、今後も安定した成長が見込まれています。専門店の増加やオンライン販売の充実により、アクセシビリティも向上しています。',
-                url: 'https://boardgamegeek.com/market/trends',
-                publishedAt: new Date(Date.now() - 3600000).toISOString(),
-                source: 'Gaming Industry Report',
-                content: 'コロナ禍を経てボードゲーム市場は大きく成長しました。'
-            },
-            {
-                title: 'ファミリー向けボードゲーム最新ガイド',
-                description: '家族で楽しめるボードゲームの選択肢が大幅に拡充されています。年齢層の異なるメンバーが一緒に楽しめる協力ゲームや、簡単なルールながら戦略性の高いゲームが人気を集めています。教育的要素を含むゲームも注目されており、楽しみながら学習できる環境づくりが重視されています。季節のイベントや休暇期間に家族の絆を深める手段として、ボードゲームの役割がますます重要になっています。初心者にも安心の入門者向け作品も豊富に揃っています。',
-                url: 'https://boardgamegeek.com/family/games',
-                publishedAt: new Date(Date.now() - 7200000).toISOString(),
-                source: 'Family Gaming Guide',
-                content: '家族の絆を深めるボードゲームの魅力をお伝えします。'
-            },
-            {
-                title: 'クラウドファンディング注目プロジェクト',
-                description: 'Kickstarterを中心としたクラウドファンディングプラットフォームで、革新的なボードゲームプロジェクトが続々と登場しています。独創的なゲームシステムや美麗なアートワークを特徴とする作品が投資家の注目を集めており、従来の出版モデルでは実現困難な挑戦的な企画も実現されています。特に小規模な制作チームによる創造性の高い作品や、ニッチなテーマを扱った専門的な作品が支持を得ています。成功事例の増加により、新しい才能の発掘の場としても機能しています。',
-                url: 'https://boardgamegeek.com/crowdfunding',
-                publishedAt: new Date(Date.now() - 10800000).toISOString(),
-                source: 'Crowdfunding News',
-                content: 'クラウドファンディングで生まれる革新的なボードゲーム。'
-            }
-        ];
-
-        // ランダムに3つ選択
-        const shuffled = newsItems.sort(() => 0.5 - Math.random());
-        return shuffled.slice(0, 3);
-    }
 
     async filterUnpostedArticles(articles) {
         const DatabaseService = require('./databaseService');
@@ -330,9 +233,6 @@ class NewsService {
         }
     }
 
-    getFallbackNews() {
-        return this.generateStaticBoardGameNews();
-    }
 }
 
 module.exports = NewsService;

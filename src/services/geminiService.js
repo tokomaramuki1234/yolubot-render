@@ -97,6 +97,52 @@ ${conversationHistory.map(conv => `ユーザー: ${conv.user_message}\nBOT: ${co
             return null;
         }
     }
+
+    async rankArticles(articles) {
+        try {
+            const prompt = `
+以下のボードゲームニュース記事を信憑性・話題性・速報性の3つの観点から評価し、ランク付けしてください。
+
+評価基準：
+1. 信憑性 (1-10点): 情報源の信頼性、内容の具体性、事実に基づいているか
+2. 話題性 (1-10点): ボードゲーム愛好者にとっての関心度、影響の大きさ
+3. 速報性 (1-10点): 情報の新しさ、リアルタイム性
+
+記事リスト：
+${articles.map((article, index) => `
+記事${index}: 
+タイトル: ${article.title}
+概要: ${article.description}
+情報源: ${article.source}
+URL: ${article.url}
+`).join('')}
+
+以下のJSON形式で回答してください：
+[
+  {"id": 0, "credibility": 8, "relevance": 9, "urgency": 7, "total": 24},
+  {"id": 1, "credibility": 6, "relevance": 7, "urgency": 8, "total": 21}
+]
+
+total = credibility + relevance + urgency で計算し、totalの降順でソートしてください。
+            `;
+
+            const result = await this.model.generateContent(prompt);
+            const response = await result.response;
+            
+            try {
+                const ranking = JSON.parse(response.text());
+                return ranking.sort((a, b) => b.total - a.total);
+            } catch (parseError) {
+                console.error('Error parsing ranking JSON:', parseError);
+                // JSONパースに失敗した場合は元の順序を返す
+                return articles.map((_, index) => ({ id: index, total: index }));
+            }
+        } catch (error) {
+            console.error('Error ranking articles:', error);
+            // エラーの場合は元の順序を返す
+            return articles.map((_, index) => ({ id: index, total: index }));
+        }
+    }
 }
 
 module.exports = GeminiService;

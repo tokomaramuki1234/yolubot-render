@@ -92,7 +92,14 @@ async function postBoardGameNews() {
             return;
         }
 
-        const newsArticles = await newsService.getBoardGameNews();
+        const newsArticles = await newsService.getBoardGameNews(true); // isScheduled = true
+        
+        if (newsArticles.length === 1 && newsArticles[0].isNoNewsMessage) {
+            // ニュースがない場合のメッセージ
+            await channel.send(newsArticles[0].description);
+            return;
+        }
+        
         const articlesToPost = newsArticles.slice(0, 3);
         
         for (const article of articlesToPost) {
@@ -101,20 +108,27 @@ async function postBoardGameNews() {
             const embed = {
                 title: article.title,
                 description: summary,
-                url: article.url,
+                url: article.url || undefined,
                 color: 0x0099ff,
                 timestamp: new Date().toISOString(),
                 footer: {
-                    text: 'Board Game News Bot'
+                    text: `${article.source} • Board Game News Bot`
                 }
             };
             
-            await channel.send({ embeds: [embed] });
+            if (article.url) {
+                await channel.send({ embeds: [embed] });
+            } else {
+                await channel.send({ content: summary });
+            }
+            
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
         
         // 投稿済み記事としてマーク
-        await newsService.markArticlesAsPosted(articlesToPost);
+        if (articlesToPost.length > 0 && !articlesToPost[0].isNoNewsMessage) {
+            await newsService.markArticlesAsPosted(articlesToPost);
+        }
     } catch (error) {
         console.error('Error posting news:', error);
     }
@@ -181,11 +195,17 @@ async function handleNewsCommand(interaction) {
     await interaction.deferReply();
     
     try {
-        const newsArticles = await newsService.getBoardGameNews();
+        const newsArticles = await newsService.getBoardGameNews(false); // isScheduled = false (6時間)
+        
+        if (newsArticles.length === 1 && newsArticles[0].isNoNewsMessage) {
+            await interaction.editReply(newsArticles[0].description);
+            return;
+        }
+        
         const topArticles = newsArticles.slice(0, 3);
         
         if (topArticles.length === 0) {
-            await interaction.editReply('現在、ニュース記事を取得できませんでした。');
+            await interaction.editReply('直近24時間以内にめぼしいニュースはありませんでしたヨモ');
             return;
         }
 
@@ -193,19 +213,30 @@ async function handleNewsCommand(interaction) {
         for (const article of topArticles) {
             const summary = await geminiService.summarizeArticle(article);
             
-            embeds.push({
-                title: article.title,
-                description: summary,
-                url: article.url,
-                color: 0x0099ff,
-                timestamp: new Date().toISOString(),
-                footer: {
-                    text: 'Board Game News Bot'
-                }
-            });
+            if (article.url) {
+                embeds.push({
+                    title: article.title,
+                    description: summary,
+                    url: article.url,
+                    color: 0x0099ff,
+                    timestamp: new Date().toISOString(),
+                    footer: {
+                        text: `${article.source} • Board Game News Bot`
+                    }
+                });
+            }
+        }
+
+        if (embeds.length > 0) {
+            await interaction.editReply({ embeds });
+        } else {
+            await interaction.editReply('直近24時間以内にめぼしいニュースはありませんでしたヨモ');
         }
         
-        await interaction.editReply({ embeds });
+        // 手動取得した記事も投稿済みとしてマーク
+        if (topArticles.length > 0 && !topArticles[0].isNoNewsMessage) {
+            await newsService.markArticlesAsPosted(topArticles);
+        }
     } catch (error) {
         console.error('Error in news command:', error);
         await interaction.editReply('ニュースの取得中にエラーが発生しました。');
