@@ -131,10 +131,10 @@ class AdvancedNewsService {
             console.log(`⚠️ Web search failed for "${keyword}": ${error.message}`);
         }
         
-        // PHASE 2: フォールバック - 高品質なダミーデータ
-        console.log(`📰 Using enhanced fallback data for "${keyword}"`);
-        const mockResults = this.generateRelevantMockNews(keyword);
-        return mockResults.slice(0, 3);
+        // PHASE 2: フォールバック - リアルタイム風データ
+        console.log(`📰 Using enhanced realtime fallback data for "${keyword}"`);
+        const realtimeResults = await this.generateRealtimeSearchResults(keyword, hoursLimit);
+        return realtimeResults.slice(0, 3);
     }
 
     async performRealWebSearch(keyword, hoursLimit) {
