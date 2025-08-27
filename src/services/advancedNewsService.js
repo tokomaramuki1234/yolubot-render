@@ -102,9 +102,16 @@ class AdvancedNewsService {
 
     generateRelevantMockNews(keyword) {
         const currentTime = new Date();
-        const newsTemplates = this.getNewsTemplatesByKeyword(keyword);
+        const allTemplates = this.getAllNewsTemplates();
         
-        return newsTemplates.map((template, index) => ({
+        // キーワードに関連するテンプレートを選択し、ランダムに3つ選ぶ
+        const relevantTemplates = allTemplates.filter(template => 
+            this.isTemplateRelevantToKeyword(template, keyword)
+        );
+        
+        const selectedTemplates = this.shuffleArray(relevantTemplates).slice(0, 3);
+        
+        return selectedTemplates.map((template, index) => ({
             title: template.title,
             description: template.description,
             url: template.url,
@@ -115,37 +122,85 @@ class AdvancedNewsService {
             reliability: this.estimateSourceReliability(template.source)
         }));
     }
-
-    getNewsTemplatesByKeyword(keyword) {
-        const templates = {
-            'board game news': [
-                {
-                    title: '2025年最注目のボードゲーム新作10選が発表',
-                    description: '業界専門誌が選ぶ2025年の最注目新作ボードゲーム10作品が発表されました。戦略ゲームから協力ゲームまで多様なラインナップが揃っています。',
-                    url: 'https://boardgamequest.com/2025-top-new-games',
-                    source: 'Board Game Quest'
-                }
-            ],
-            'Kickstarter board game': [
-                {
-                    title: 'Kickstarterで驚異的な資金調達を達成したボードゲームが話題',
-                    description: '新しいメカニクスを採用した革新的ボードゲームがKickstarterで目標額の500%を達成し、業界関係者の注目を集めています。',
-                    url: 'https://kickstarter.com/projects/boardgame-innovation',
-                    source: 'Kickstarter News'
-                }
-            ],
-            'ゲームマーケット': [
-                {
-                    title: '次回ゲームマーケット出展作品の事前情報が公開',
-                    description: '来月開催のゲームマーケットで注目の新作ボードゲームの詳細情報が発表されました。日本のインディーデザイナーによる意欲作が多数出展予定です。',
-                    url: 'https://gamemarket.jp/news/upcoming-releases',
-                    source: 'ゲームマーケット公式'
-                }
-            ]
-        };
-
-        return templates[keyword] || templates['board game news'];
+    
+    getAllNewsTemplates() {
+        return [
+            {
+                title: '2025年注目のボードゲーム新作情報',
+                description: '今年発表予定の注目ボードゲーム新作について、戦略ゲームから協力ゲームまで幅広いジャンルをカバー。革新的メカニクスを採用した作品が多数登場予定です。',
+                url: 'https://boardgamegeek.com/',
+                source: 'BoardGameGeek',
+                keywords: ['board game', 'new', 'release', '2025']
+            },
+            {
+                title: 'Kickstarterボードゲームプロジェクト注目作品',
+                description: 'クラウドファンディングで資金調達中の革新的ボードゲームプロジェクト。独創的なシステムと美麗なアートワークで支援者の注目を集めています。',
+                url: 'https://www.kickstarter.com/discover/categories/games/tabletop%20games',
+                source: 'Kickstarter',
+                keywords: ['kickstarter', 'crowdfunding', 'project']
+            },
+            {
+                title: 'ゲームマーケット2025春 出展情報',
+                description: '日本最大のアナログゲームイベント「ゲームマーケット」の最新出展情報。国内インディーデザイナーの意欲的な新作が多数展示予定です。',
+                url: 'https://gamemarket.jp/',
+                source: 'ゲームマーケット公式',
+                keywords: ['ゲームマーケット', 'event', 'japan', 'indie']
+            },
+            {
+                title: 'Spiel des Jahres 2025 候補作品発表',
+                description: 'ドイツ年間ゲーム大賞2025年の候補作品が発表されました。今年は特に家族向けゲームと戦略ゲームのバランスが取れた優秀な作品が揃っています。',
+                url: 'https://www.spiel-des-jahres.de/en/',
+                source: 'Spiel des Jahres',
+                keywords: ['award', 'spiel des jahres', 'germany', 'winner']
+            },
+            {
+                title: 'Gen Con 2025 新作発表まとめ',
+                description: '北米最大のゲームコンベンション「Gen Con」で発表された新作ボードゲームの情報をまとめました。大手出版社からインディー作品まで幅広くご紹介。',
+                url: 'https://www.gencon.com/',
+                source: 'Gen Con',
+                keywords: ['gen con', 'convention', 'announcement', 'america']
+            },
+            {
+                title: 'ボードゲーム市場動向レポート2025',
+                description: '2025年のボードゲーム市場動向について詳細分析。デジタル統合型ゲームの成長と、クラシックゲームの根強い人気について解説します。',
+                url: 'https://boardgamewire.com/',
+                source: 'Board Game Wire',
+                keywords: ['market', 'trend', 'analysis', 'industry']
+            },
+            {
+                title: 'Asmodee新作ラインナップ発表',
+                description: '世界最大のボードゲーム出版グループAsmodeeから2025年の新作ラインナップが発表。人気シリーズの続編から全く新しいIPまで多彩な作品が予定されています。',
+                url: 'https://www.asmodee.com/en/',
+                source: 'Asmodee',
+                keywords: ['asmodee', 'publisher', 'lineup', 'announcement']
+            },
+            {
+                title: '協力型ボードゲームの新潮流',
+                description: '近年人気が高まる協力型ボードゲームの最新動向。プレイヤー同士が協力してゲームに挑む新しいメカニクスや、ストーリー要素を重視した作品が注目されています。',
+                url: 'https://www.shutupandsitdown.com/',
+                source: 'Shut Up & Sit Down',
+                keywords: ['cooperative', 'trend', 'mechanism', 'story']
+            }
+        ];
     }
+    
+    isTemplateRelevantToKeyword(template, keyword) {
+        const keywordLower = keyword.toLowerCase();
+        return template.keywords.some(templateKeyword => 
+            keywordLower.includes(templateKeyword.toLowerCase()) || 
+            templateKeyword.toLowerCase().includes(keywordLower)
+        ) || template.title.toLowerCase().includes(keywordLower);
+    }
+    
+    shuffleArray(array) {
+        const shuffled = [...array];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        return shuffled;
+    }
+
 
     // 2. 高精度信憑性判定システム（100点満点）
     calculateCredibilityScore(article) {
