@@ -2,65 +2,15 @@ const axios = require('axios');
 
 class NewsService {
     constructor() {
-        // Web検索を使用するため、固定ソースは不要
+        // シンプルなニュースサービス
     }
 
     async getBoardGameNews(isScheduled = false) {
         try {
-            const hoursLimit = isScheduled ? 12 : 6;
-            return await this.searchRealtimeNews(hoursLimit);
-        } catch (error) {
-            console.error('Error fetching board game news:', error);
-            return [];
-        }
-    }
-
-    async searchNews(query) {
-        try {
-            const response = await axios.get('https://newsapi.org/v2/everything', {
-                params: {
-                    q: query,
-                    language: 'en',
-                    sortBy: 'publishedAt',
-                    pageSize: 20,
-                    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-                },
-                headers: {
-                    'X-API-Key': process.env.NEWS_API_KEY || ''
-                }
-            });
-
-            if (response.data && response.data.articles) {
-                return response.data.articles.map(article => ({
-                    title: article.title,
-                    description: article.description,
-                    url: article.url,
-                    publishedAt: article.publishedAt,
-                    source: article.source.name,
-                    content: article.content
-                }));
-            }
-        } catch (error) {
-            if (error.response?.status === 401) {
-                console.warn('NewsAPI key not configured, using alternative sources');
-            } else {
-                console.error('Error searching news with NewsAPI:', error.message);
-            }
-        }
-
-        return await this.searchAlternativeNews(query);
-    }
-
-    async searchRealtimeNews(hoursLimit) {
-        try {
-            console.log(`Searching for news within ${hoursLimit} hours`);
+            console.log(`Fetching news, isScheduled: ${isScheduled}`);
             
-            // シンプルなニュース記事を生成
-            const articles = await this.getSimpleNewsArticles();
-            
-            if (articles.length === 0) {
-                return this.getNoNewsMessage();
-            }
+            // 暫定的にシンプルなニュース記事を返す
+            const articles = this.getSimpleNewsArticles();
             
             // 重複除去
             const uniqueArticles = this.removeDuplicates(articles);
@@ -72,27 +22,17 @@ class NewsService {
                 return this.getNoNewsMessage();
             }
             
-            // AIによる評価とランキング（エラー処理を強化）
-            let rankedArticles;
-            try {
-                rankedArticles = await this.rankArticlesByAI(unpostedArticles);
-            } catch (error) {
-                console.error('AI ranking error:', error);
-                rankedArticles = unpostedArticles; // AI評価に失敗した場合は元の順序を使用
-            }
-            
-            return rankedArticles.slice(0, 3);
+            return unpostedArticles.slice(0, 3);
             
         } catch (error) {
-            console.error('Error in searchRealtimeNews:', error);
+            console.error('Error fetching board game news:', error);
             return this.getNoNewsMessage();
         }
     }
-    
-    async getSimpleNewsArticles() {
-        // シンプルなニュース記事を生成（WebSearch無しの暫定措置）
+
+    getSimpleNewsArticles() {
         const currentTime = new Date();
-        const articles = [
+        return [
             {
                 title: '2025年冬の注目ボードゲーム新作発表',
                 description: '今季発表予定の戦略ゲームと協力ゲームの最新情報。新メカニクスを採用した革新的作品が登場予定。',
@@ -118,62 +58,7 @@ class NewsService {
                 content: '2025年第1四半期市場レポート'
             }
         ];
-        
-        return articles;
     }
-    
-    
-    
-    getNoNewsMessage() {
-        return [{
-            title: 'ニュースなし',
-            description: '直近24時間以内にめぼしいニュースはありませんでしたヨモ',
-            url: '',
-            publishedAt: new Date().toISOString(),
-            source: 'YOLUBot',
-            content: '直近24時間以内にめぼしいニュースはありませんでしたヨモ',
-            isNoNewsMessage: true
-        }];
-    }
-
-    async rankArticlesByAI(articles) {
-        const GeminiService = require('./geminiService');
-        const gemini = new GeminiService();
-        
-        try {
-            const articlesData = articles.map((article, index) => ({
-                id: index,
-                title: article.title,
-                description: article.description,
-                source: article.source,
-                url: article.url
-            }));
-            
-            const ranking = await gemini.rankArticles(articlesData);
-            
-            // ランキング結果に基づいて記事を並び替え
-            const rankedArticles = ranking.map(rank => articles[rank.id]);
-            
-            return rankedArticles;
-        } catch (error) {
-            console.error('Error ranking articles with AI:', error);
-            // AI評価に失敗した場合は元の順序を返す
-            return articles;
-        }
-    }
-
-
-    removeDuplicates(articles) {
-        const seen = new Set();
-        return articles.filter(article => {
-            const key = article.url || article.title.toLowerCase();
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
-    }
-
-
 
     async filterUnpostedArticles(articles) {
         const DatabaseService = require('./databaseService');
@@ -214,6 +99,53 @@ class NewsService {
         }
     }
 
+    removeDuplicates(articles) {
+        const seen = new Set();
+        return articles.filter(article => {
+            const key = article.url || article.title.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+
+    getNoNewsMessage() {
+        return [{
+            title: 'ニュースなし',
+            description: '直近24時間以内にめぼしいニュースはありませんでしたヨモ',
+            url: '',
+            publishedAt: new Date().toISOString(),
+            source: 'YOLUBot',
+            content: '直近24時間以内にめぼしいニュースはありませんでしたヨモ',
+            isNoNewsMessage: true
+        }];
+    }
+
+    async rankArticlesByAI(articles) {
+        const GeminiService = require('./geminiService');
+        const gemini = new GeminiService();
+        
+        try {
+            const articlesData = articles.map((article, index) => ({
+                id: index,
+                title: article.title,
+                description: article.description,
+                source: article.source,
+                url: article.url
+            }));
+            
+            const ranking = await gemini.rankArticles(articlesData);
+            
+            // ランキング結果に基づいて記事を並び替え
+            const rankedArticles = ranking.map(rank => articles[rank.id]);
+            
+            return rankedArticles;
+        } catch (error) {
+            console.error('Error ranking articles with AI:', error);
+            // AI評価に失敗した場合は元の順序を返す
+            return articles;
+        }
+    }
 }
 
 module.exports = NewsService;
