@@ -19,6 +19,10 @@ const commands = [
         description: 'BOTの権限状況をチェックします（管理者限定）'
     },
     {
+        name: 'analytics',
+        description: '高度なニュース分析情報を表示します（管理者限定）'
+    },
+    {
         name: 'help',
         description: 'BOTの使い方を表示します'
     }

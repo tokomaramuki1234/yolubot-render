@@ -2,7 +2,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, Events } = require('discord.js');
 const cron = require('node-cron');
 const GeminiService = require('./services/geminiService');
-const NewsService = require('./services/newsService');
+const AdvancedNewsService = require('./services/advancedNewsService');
 const DatabaseService = require('./services/databaseService');
 const PermissionChecker = require('./utils/permissionChecker');
 
@@ -15,7 +15,7 @@ const client = new Client({
 });
 
 const geminiService = new GeminiService();
-const newsService = new NewsService();
+const newsService = new AdvancedNewsService();
 const databaseService = new DatabaseService();
 
 client.once(Events.ClientReady, async (c) => {
@@ -66,6 +66,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             case 'permissions':
                 await handlePermissionsCommand(interaction);
                 break;
+            case 'analytics':
+                await handleAnalyticsCommand(interaction);
+                break;
             case 'help':
                 await handleHelpCommand(interaction);
                 break;
@@ -105,16 +108,25 @@ async function postBoardGameNews() {
         for (const article of articlesToPost) {
             const summary = await geminiService.summarizeArticle(article);
             
+            // スコア情報を含むリッチな埋め込み
             const embed = {
                 title: article.title,
                 description: summary,
                 url: article.url || undefined,
-                color: 0x0099ff,
+                color: this.getScoreColor(article),
                 timestamp: new Date().toISOString(),
                 footer: {
-                    text: `${article.source} • Board Game News Bot`
+                    text: `${article.source} • 信頼度:${article.credibilityScore || 'N/A'} 話題性:${article.relevanceScore || 'N/A'} 速報性:${article.urgencyScore || 'N/A'}`
                 }
             };
+
+            // 高スコア記事には特別な表示
+            if (this.getTotalScore(article) > 200) {
+                embed.author = {
+                    name: '🔥 高評価ニュース',
+                    icon_url: 'https://cdn.discordapp.com/emojis/fire.png'
+                };
+            }
             
             if (article.url) {
                 await channel.send({ embeds: [embed] });
@@ -125,7 +137,7 @@ async function postBoardGameNews() {
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
         
-        // 投稿済み記事としてマーク
+        // 投稿済み記事としてマーク（スコア情報込み）
         if (articlesToPost.length > 0 && !articlesToPost[0].isNoNewsMessage) {
             await newsService.markArticlesAsPosted(articlesToPost);
         }
@@ -214,16 +226,25 @@ async function handleNewsCommand(interaction) {
             const summary = await geminiService.summarizeArticle(article);
             
             if (article.url) {
-                embeds.push({
+                const embed = {
                     title: article.title,
                     description: summary,
                     url: article.url,
-                    color: 0x0099ff,
+                    color: getScoreColor(article),
                     timestamp: new Date().toISOString(),
                     footer: {
-                        text: `${article.source} • Board Game News Bot`
+                        text: `${article.source} • 信頼度:${article.credibilityScore || 'N/A'} 話題性:${article.relevanceScore || 'N/A'} 速報性:${article.urgencyScore || 'N/A'}`
                     }
-                });
+                };
+
+                // 高スコア記事には特別な表示
+                if (getTotalScore(article) > 200) {
+                    embed.author = {
+                        name: '🔥 高評価ニュース'
+                    };
+                }
+
+                embeds.push(embed);
             }
         }
 
@@ -366,6 +387,54 @@ async function handlePermissionsCommand(interaction) {
     }
 }
 
+async function handleAnalyticsCommand(interaction) {
+    try {
+        // 管理者権限チェック
+        if (!interaction.member.permissions.has('Administrator')) {
+            await interaction.reply({ content: 'このコマンドは管理者限定です。', ephemeral: true });
+            return;
+        }
+
+        await interaction.deferReply();
+
+        // 高度な分析データを取得
+        const analytics = await databaseService.getNewsAnalytics(30);
+        
+        const embed = {
+            title: '📊 高度ニュース分析レポート (過去30日)',
+            fields: [
+                {
+                    name: '📈 総合統計',
+                    value: `総記事数: ${analytics.overall.total_articles || 0}\n平均信頼度: ${Math.round(analytics.overall.avg_credibility || 0)}/100\n平均話題性: ${Math.round(analytics.overall.avg_relevance || 0)}/100\n平均速報性: ${Math.round(analytics.overall.avg_urgency || 0)}/100\n総合平均スコア: ${Math.round(analytics.overall.avg_total || 0)}/300`,
+                    inline: true
+                },
+                {
+                    name: '🎯 品質指標',
+                    value: `🔥 高評価記事: ${analytics.bySource.filter(s => s.avg_score > 200).length}件\n⭐ 良質記事: ${analytics.bySource.filter(s => s.avg_score > 150 && s.avg_score <= 200).length}件\n📰 標準記事: ${analytics.bySource.filter(s => s.avg_score <= 150).length}件`,
+                    inline: true
+                },
+                {
+                    name: '📡 トップソース',
+                    value: analytics.bySource.slice(0, 5).map((source, index) => 
+                        `${index + 1}. ${source.source}: ${Math.round(source.avg_score)}/300 (${source.article_count}件)`
+                    ).join('\n') || 'データなし',
+                    inline: false
+                }
+            ],
+            color: 0xFF6B6B,
+            timestamp: new Date().toISOString(),
+            footer: {
+                text: '高度ニュース分析システム v2.0'
+            }
+        };
+
+        await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error in analytics command:', error);
+        await interaction.editReply('分析データの取得中にエラーが発生しました。');
+    }
+}
+
 async function handleHelpCommand(interaction) {
     const embed = {
         title: '🤖 YOLUBot ヘルプ',
@@ -388,7 +457,12 @@ async function handleHelpCommand(interaction) {
             },
             {
                 name: '📋 スラッシュコマンド',
-                value: '`/news` - 手動でニュース取得\n`/stats` - BOT統計\n`/preferences` - あなたの学習済み好み\n`/permissions` - 権限チェック（管理者限定）\n`/help` - このヘルプ',
+                value: '`/news` - 手動でニュース取得（AI評価スコア付き）\n`/stats` - BOT統計\n`/preferences` - あなたの学習済み好み\n`/analytics` - 高度ニュース分析（管理者限定）\n`/permissions` - 権限チェック（管理者限定）\n`/help` - このヘルプ',
+                inline: false
+            },
+            {
+                name: '🎯 高度評価システム',
+                value: '信頼度・話題性・速報性の3軸で記事を自動評価\n🔥 高評価記事には特別表示\nスコアに応じた色分け表示',
                 inline: false
             }
         ],
@@ -399,6 +473,19 @@ async function handleHelpCommand(interaction) {
     };
     
     await interaction.reply({ embeds: [embed] });
+}
+
+// ヘルパー関数
+function getScoreColor(article) {
+    const totalScore = getTotalScore(article);
+    if (totalScore > 250) return 0xFF6B6B; // 赤 - 最高評価
+    if (totalScore > 200) return 0xFF9F43; // オレンジ - 高評価
+    if (totalScore > 150) return 0x4ECDC4; // 青緑 - 良好
+    return 0x95E1D3; // 薄緑 - 標準
+}
+
+function getTotalScore(article) {
+    return (article.credibilityScore || 0) + (article.relevanceScore || 0) + (article.urgencyScore || 0);
 }
 
 client.login(process.env.DISCORD_TOKEN);

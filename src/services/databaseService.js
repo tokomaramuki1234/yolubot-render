@@ -105,7 +105,33 @@ class DatabaseService {
                 title TEXT NOT NULL,
                 url TEXT UNIQUE NOT NULL,
                 description TEXT,
+                source TEXT,
+                credibility_score INTEGER DEFAULT 0,
+                relevance_score INTEGER DEFAULT 0,
+                urgency_score INTEGER DEFAULT 0,
+                total_score INTEGER DEFAULT 0,
+                search_keywords TEXT,
+                published_at DATETIME,
                 posted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )`,
+            `CREATE TABLE IF NOT EXISTS article_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                article_url TEXT NOT NULL,
+                user_id TEXT,
+                click_count INTEGER DEFAULT 0,
+                dwell_time INTEGER DEFAULT 0,
+                user_rating INTEGER,
+                feedback_type TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )`,
+            `CREATE TABLE IF NOT EXISTS search_analytics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                search_keyword TEXT NOT NULL,
+                layer_type TEXT NOT NULL,
+                success_rate REAL DEFAULT 0.0,
+                avg_relevance_score REAL DEFAULT 0.0,
+                usage_count INTEGER DEFAULT 0,
+                last_used DATETIME DEFAULT CURRENT_TIMESTAMP
             )`
         ];
 
@@ -237,17 +263,121 @@ class DatabaseService {
         }
     }
 
-    async saveNewsPost(title, url, description) {
+    async saveNewsPost(title, url, description, article = {}) {
         const query = this.isPostgres
-            ? `INSERT INTO news_posts (title, url, description) 
-               VALUES ($1, $2, $3)
+            ? `INSERT INTO news_posts (title, url, description, source, credibility_score, 
+               relevance_score, urgency_score, total_score, search_keywords, published_at) 
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                ON CONFLICT (url) DO NOTHING`
-            : `INSERT OR IGNORE INTO news_posts (title, url, description) 
-               VALUES ($1, $2, $3)`;
+            : `INSERT OR IGNORE INTO news_posts (title, url, description, source, credibility_score,
+               relevance_score, urgency_score, total_score, search_keywords, published_at) 
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`;
         try {
-            await this.runQuery(query, [title, url, description]);
+            const totalScore = (article.credibilityScore || 0) + (article.relevanceScore || 0) + (article.urgencyScore || 0);
+            await this.runQuery(query, [
+                title, 
+                url, 
+                description,
+                article.source || 'Unknown',
+                article.credibilityScore || 0,
+                article.relevanceScore || 0,
+                article.urgencyScore || 0,
+                totalScore,
+                article.searchKeyword || '',
+                article.publishedAt || new Date().toISOString()
+            ]);
         } catch (error) {
             console.error('Error saving news post:', error);
+        }
+    }
+
+    async saveArticleFeedback(articleUrl, userId, feedbackData) {
+        const query = `INSERT INTO article_feedback 
+                       (article_url, user_id, click_count, dwell_time, user_rating, feedback_type) 
+                       VALUES ($1, $2, $3, $4, $5, $6)`;
+        try {
+            await this.runQuery(query, [
+                articleUrl,
+                userId,
+                feedbackData.clickCount || 0,
+                feedbackData.dwellTime || 0,
+                feedbackData.userRating || null,
+                feedbackData.feedbackType || 'view'
+            ]);
+        } catch (error) {
+            console.error('Error saving article feedback:', error);
+        }
+    }
+
+    async updateSearchAnalytics(keyword, layerType, successRate, avgRelevance) {
+        const updateQuery = `INSERT OR REPLACE INTO search_analytics 
+                           (search_keyword, layer_type, success_rate, avg_relevance_score, 
+                           usage_count, last_used) 
+                           VALUES ($1, $2, $3, $4, 
+                           COALESCE((SELECT usage_count FROM search_analytics 
+                           WHERE search_keyword = $1 AND layer_type = $2), 0) + 1,
+                           CURRENT_TIMESTAMP)`;
+        try {
+            await this.runQuery(updateQuery, [keyword, layerType, successRate, avgRelevance]);
+        } catch (error) {
+            console.error('Error updating search analytics:', error);
+        }
+    }
+
+    async getTopPerformingKeywords(layerType, limit = 10) {
+        const query = `SELECT search_keyword, success_rate, avg_relevance_score, usage_count 
+                       FROM search_analytics 
+                       WHERE layer_type = $1 
+                       ORDER BY (success_rate * avg_relevance_score) DESC 
+                       LIMIT $2`;
+        try {
+            return await this.getQuery(query, [layerType, limit]);
+        } catch (error) {
+            console.error('Error getting top performing keywords:', error);
+            return [];
+        }
+    }
+
+    async getNewsAnalytics(days = 30) {
+        const queries = this.isPostgres ? [
+            `SELECT AVG(credibility_score) as avg_credibility, 
+             AVG(relevance_score) as avg_relevance, 
+             AVG(urgency_score) as avg_urgency,
+             AVG(total_score) as avg_total,
+             COUNT(*) as total_articles
+             FROM news_posts 
+             WHERE posted_at > NOW() - INTERVAL '${days} days'`,
+            `SELECT source, COUNT(*) as article_count, AVG(total_score) as avg_score
+             FROM news_posts 
+             WHERE posted_at > NOW() - INTERVAL '${days} days'
+             GROUP BY source 
+             ORDER BY avg_score DESC`
+        ] : [
+            `SELECT AVG(credibility_score) as avg_credibility, 
+             AVG(relevance_score) as avg_relevance, 
+             AVG(urgency_score) as avg_urgency,
+             AVG(total_score) as avg_total,
+             COUNT(*) as total_articles
+             FROM news_posts 
+             WHERE posted_at > datetime('now', '-${days} days')`,
+            `SELECT source, COUNT(*) as article_count, AVG(total_score) as avg_score
+             FROM news_posts 
+             WHERE posted_at > datetime('now', '-${days} days')
+             GROUP BY source 
+             ORDER BY avg_score DESC`
+        ];
+
+        try {
+            const [overallStats] = await this.getQuery(queries[0]);
+            const sourceStats = await this.getQuery(queries[1]);
+            
+            return {
+                overall: overallStats,
+                bySource: sourceStats
+            };
+        } catch (error) {
+            console.error('Error getting news analytics:', error);
+            return { overall: {}, bySource: [] };
         }
     }
 
