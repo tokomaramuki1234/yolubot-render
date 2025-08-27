@@ -48,9 +48,15 @@ client.on(Events.MessageCreate, async (message) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
+    console.log('🎯 Interaction received:', interaction.type, interaction.commandName || 'no-command');
+    
+    if (!interaction.isChatInputCommand()) {
+        console.log('❌ Not a chat input command');
+        return;
+    }
 
     const { commandName } = interaction;
+    console.log(`📝 Processing command: ${commandName}`);
 
     try {
         switch (commandName) {
@@ -79,13 +85,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 await interaction.reply('Unknown command');
         }
     } catch (error) {
-        console.error('Error handling slash command:', error);
+        console.error(`🚨 Error handling slash command '${commandName}':`, error);
         const errorMessage = 'コマンドの実行中にエラーが発生しました。';
         
-        if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: errorMessage, ephemeral: true });
-        } else {
-            await interaction.reply({ content: errorMessage, ephemeral: true });
+        try {
+            if (interaction.replied || interaction.deferred) {
+                await interaction.followUp({ content: errorMessage, ephemeral: true });
+            } else {
+                await interaction.reply({ content: errorMessage, ephemeral: true });
+            }
+        } catch (replyError) {
+            console.error('🚨 Error sending error message:', replyError);
         }
     }
 });
