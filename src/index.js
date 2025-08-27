@@ -549,4 +549,22 @@ function getTotalScore(article) {
     return (article.credibilityScore || 0) + (article.relevanceScore || 0) + (article.urgencyScore || 0);
 }
 
+// Render.com用の簡易HTTPサーバー（ポートスキャン対策）
+const http = require('http');
+const port = process.env.PORT || 3000;
+
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        status: 'YOLUBot is running',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        version: '1.0.2'
+    }));
+});
+
+server.listen(port, () => {
+    console.log(`Health check server running on port ${port}`);
+});
+
 client.login(process.env.DISCORD_TOKEN);
