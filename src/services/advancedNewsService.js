@@ -1,4 +1,3 @@
-// advancedNewsService.js - 修正版
 const DatabaseService = require('./databaseService');
 const WebSearchService = require('./webSearchService');
 
@@ -161,6 +160,73 @@ class AdvancedNewsService {
             return url.startsWith('http://') || url.startsWith('https://');
         } catch (error) {
             return false;
+        }
+    }
+
+    // 🔧 追加: healthCheck メソッド
+    async healthCheck() {
+        try {
+            const healthStatus = {
+                service: 'AdvancedNewsService',
+                status: 'healthy',
+                timestamp: new Date().toISOString(),
+                components: {},
+                stats: this.getWebSearchStats()
+            };
+
+            // WebSearchServiceのヘルスチェック
+            try {
+                if (this.webSearchService && typeof this.webSearchService.healthCheck === 'function') {
+                    healthStatus.components.webSearch = await this.webSearchService.healthCheck();
+                } else {
+                    healthStatus.components.webSearch = {
+                        status: this.webSearchService ? 'healthy' : 'unhealthy',
+                        message: this.webSearchService ? 'WebSearchService available' : 'WebSearchService not initialized'
+                    };
+                }
+            } catch (error) {
+                healthStatus.components.webSearch = {
+                    status: 'unhealthy',
+                    error: error.message
+                };
+            }
+
+            // DatabaseServiceのヘルスチェック
+            try {
+                if (this.dbService && typeof this.dbService.healthCheck === 'function') {
+                    healthStatus.components.database = await this.dbService.healthCheck();
+                } else {
+                    healthStatus.components.database = {
+                        status: this.dbService ? 'healthy' : 'unhealthy',
+                        message: this.dbService ? 'DatabaseService available' : 'DatabaseService not initialized'
+                    };
+                }
+            } catch (error) {
+                healthStatus.components.database = {
+                    status: 'unhealthy',
+                    error: error.message
+                };
+            }
+
+            // 全体のステータス判定
+            const allHealthy = Object.values(healthStatus.components).every(
+                component => component.status === 'healthy'
+            );
+            
+            if (!allHealthy) {
+                healthStatus.status = 'degraded';
+            }
+
+            return healthStatus;
+
+        } catch (error) {
+            console.error('❌ AdvancedNewsService HealthCheck エラー:', error);
+            return {
+                service: 'AdvancedNewsService',
+                status: 'unhealthy',
+                timestamp: new Date().toISOString(),
+                error: error.message
+            };
         }
     }
 
