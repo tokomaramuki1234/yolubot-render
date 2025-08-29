@@ -23,7 +23,12 @@ const databaseService = new DatabaseService();
 client.once(Events.ClientReady, async (c) => {
     console.log(`Ready! Logged in as ${c.user.tag}`);
     
-    await databaseService.init();
+    try {
+        await databaseService.init();
+        console.log('✅ データベース初期化完了');
+    } catch (error) {
+        console.error('❌ データベース初期化失敗:', error);
+    }
     
     // WebSearchServiceとAdvancedNewsServiceの実装確認
     try {
@@ -34,22 +39,27 @@ client.once(Events.ClientReady, async (c) => {
     }
     
     // 権限チェックを実行
-    await PermissionChecker.logPermissionCheck(client, process.env.CHANNEL_ID);
+    try {
+        await PermissionChecker.logPermissionCheck(client, process.env.CHANNEL_ID);
+    } catch (error) {
+        console.error('❌ 権限チェック失敗:', error);
+    }
     
+    // 定期ニュース投稿スケジュール（朝7時・夜19時）
     cron.schedule('0 7,19 * * *', async () => {
-        console.log('Running scheduled news update...');
+        console.log('⏰ 定期ニュース更新実行中...');
         await postBoardGameNews();
     });
     
+    // 週次ユーザー設定分析（日曜日2時）
     cron.schedule('0 2 * * 0', async () => {
-        console.log('Running weekly user preference analysis...');
+        console.log('📊 週次ユーザー設定分析実行中...');
         await analyzeUserPreferences();
     });
 });
 
 client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot) return;
-    
     if (message.content.startsWith('!')) return;
     
     if (message.mentions.has(client.user)) {
@@ -112,60 +122,84 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 async function postBoardGameNews() {
     try {
+        console.log('📰 定期ニュース投稿開始...');
+        
         const channel = client.channels.cache.get(process.env.CHANNEL_ID);
         if (!channel) {
-            console.error('Channel not found');
+            console.error('❌ チャンネルが見つかりません: ', process.env.CHANNEL_ID);
             return;
         }
 
         const newsArticles = await newsService.getBoardGameNews(true); // isScheduled = true
         
         if (newsArticles.length === 1 && newsArticles[0].isNoNewsMessage) {
-            // ニュースがない場合のメッセージ
             await channel.send(newsArticles[0].description);
+            console.log('📰 ニュースなしメッセージを投稿');
             return;
         }
         
+        let successCount = 0;
         const articlesToPost = newsArticles.slice(0, 3);
         
-        for (const article of articlesToPost) {
-            const summary = await geminiService.summarizeArticle(article);
-            
-            // スコア情報を含むリッチな埋め込み
-            const embed = {
-                title: article.title,
-                description: summary,
-                url: article.url || undefined,
-                color: this.getScoreColor(article),
-                timestamp: new Date().toISOString(),
-                footer: {
-                    text: `${article.source} • 信頼度:${article.credibilityScore || 'N/A'} 話題性:${article.relevanceScore || 'N/A'} 速報性:${article.urgencyScore || 'N/A'}`
-                }
-            };
-
-            // 高スコア記事には特別な表示
-            if (this.getTotalScore(article) > 200) {
-                embed.author = {
-                    name: '🔥 高評価ニュース',
-                    icon_url: 'https://cdn.discordapp.com/emojis/fire.png'
+        for (const [index, article] of articlesToPost.entries()) {
+            try {
+                const summary = await geminiService.summarizeArticle(article);
+                
+                // 記事の長さ制限（500文字以下）
+                const trimmedSummary = summary.length > 500 ? 
+                    summary.substring(0, 497) + '...' : summary;
+                
+                const embed = {
+                    title: article.title,
+                    description: trimmedSummary,
+                    url: article.url || undefined,
+                    color: getScoreColor(article),
+                    timestamp: new Date().toISOString(),
+                    footer: {
+                        text: `${article.source} • 信頼度:${article.credibilityScore || 'N/A'} 話題性:${article.relevanceScore || 'N/A'} 速報性:${article.urgencyScore || 'N/A'}`
+                    }
                 };
-            }
-            
-            if (article.url) {
+
+                // 高スコア記事の特別表示
+                const totalScore = getTotalScore(article);
+                if (totalScore > 200) {
+                    embed.author = {
+                        name: '🔥 高評価ニュース'
+                    };
+                }
+                
                 await channel.send({ embeds: [embed] });
-            } else {
-                await channel.send({ content: summary });
+                successCount++;
+                
+                // 連投防止
+                if (index < articlesToPost.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+                
+            } catch (articleError) {
+                console.error(`記事投稿エラー "${article.title}":`, articleError);
+                continue; // 他の記事は継続
             }
-            
-            await new Promise(resolve => setTimeout(resolve, 1000));
         }
         
-        // 投稿済み記事としてマーク（スコア情報込み）
-        if (articlesToPost.length > 0 && !articlesToPost[0].isNoNewsMessage) {
-            await newsService.markArticlesAsPosted(articlesToPost);
+        // 投稿済み記事としてマーク
+        if (successCount > 0) {
+            await newsService.markArticlesAsPosted(articlesToPost.slice(0, successCount));
+            console.log(`✅ 定期ニュース投稿完了: ${successCount}件`);
         }
+        
     } catch (error) {
-        console.error('Error posting news:', error);
+        console.error('❌ 定期ニュース投稿エラー:', error);
+        
+        // エラー通知（オプション）
+        try {
+            const channel = client.channels.cache.get(process.env.CHANNEL_ID);
+            if (channel) {
+                await channel.send('⚠️ ニュース取得中にエラーが発生しました。管理者に連絡してください。');
+            }
+        } catch (notifyError) {
+            console.error('エラー通知失敗:', notifyError);
+        }
     }
 }
 
@@ -230,68 +264,89 @@ async function handleNewsCommand(interaction) {
     await interaction.deferReply();
     
     try {
-        console.log('🔍 Starting news search with debug information...');
+        console.log('🔍 手動ニュース検索開始...');
         const startTime = Date.now();
         
-        const newsArticles = await newsService.getBoardGameNews(false); // isScheduled = false (6時間)
+        const newsArticles = await newsService.getBoardGameNews(false); // 6時間以内
         
-        // 検索実行後の統計情報確認
+        // デバッグ情報
         const stats = newsService.getSearchStats();
-        console.log('📊 Search Stats:', JSON.stringify(stats, null, 2));
-        console.log(`⏱️ Search completed in ${Date.now() - startTime}ms`);
+        console.log('📊 検索統計:', JSON.stringify(stats, null, 2));
+        console.log(`⏱️ 検索時間: ${Date.now() - startTime}ms`);
         
         if (newsArticles.length === 1 && newsArticles[0].isNoNewsMessage) {
             await interaction.editReply(newsArticles[0].description);
             return;
         }
         
-        const topArticles = newsArticles.slice(0, 3);
-        
-        if (topArticles.length === 0) {
-            await interaction.editReply('直近24時間以内にめぼしいニュースはありませんでしたヨモ');
+        if (newsArticles.length === 0) {
+            await interaction.editReply('直近6時間以内にめぼしいニュースはありませんでしたヨモ');
             return;
         }
 
         const embeds = [];
+        const topArticles = newsArticles.slice(0, 3);
+        
         for (const article of topArticles) {
-            const summary = await geminiService.summarizeArticle(article);
-            
-            if (article.url) {
-                const embed = {
-                    title: article.title,
-                    description: summary,
-                    url: article.url,
-                    color: getScoreColor(article),
-                    timestamp: new Date().toISOString(),
-                    footer: {
-                        text: `${article.source} • 信頼度:${article.credibilityScore || 'N/A'} 話題性:${article.relevanceScore || 'N/A'} 速報性:${article.urgencyScore || 'N/A'}`
-                    }
-                };
-
-                // 高スコア記事には特別な表示
-                if (getTotalScore(article) > 200) {
-                    embed.author = {
-                        name: '🔥 高評価ニュース'
+            try {
+                const summary = await geminiService.summarizeArticle(article);
+                
+                // 500文字制限
+                const trimmedSummary = summary.length > 500 ? 
+                    summary.substring(0, 497) + '...' : summary;
+                
+                if (article.url && article.title) {
+                    const embed = {
+                        title: article.title,
+                        description: trimmedSummary,
+                        url: article.url,
+                        color: getScoreColor(article),
+                        timestamp: new Date().toISOString(),
+                        footer: {
+                            text: `${article.source} • 信頼度:${article.credibilityScore || 'N/A'} 話題性:${article.relevanceScore || 'N/A'} 速報性:${article.urgencyScore || 'N/A'}`
+                        }
                     };
-                }
 
-                embeds.push(embed);
+                    // 高スコア記事の特別表示
+                    if (getTotalScore(article) > 200) {
+                        embed.author = {
+                            name: '🔥 高評価ニュース'
+                        };
+                    }
+
+                    embeds.push(embed);
+                }
+            } catch (summaryError) {
+                console.error(`記事要約エラー "${article.title}":`, summaryError);
+                // 要約失敗時は元の説明を使用
+                if (article.url && article.title) {
+                    embeds.push({
+                        title: article.title,
+                        description: article.description || '記事の詳細はURLをご確認ください。',
+                        url: article.url,
+                        color: 0x0099ff,
+                        timestamp: new Date().toISOString(),
+                        footer: {
+                            text: `${article.source} • スコア情報取得エラー`
+                        }
+                    });
+                }
             }
         }
 
         if (embeds.length > 0) {
             await interaction.editReply({ embeds });
+            
+            // 手動取得記事も投稿済みとしてマーク
+            await newsService.markArticlesAsPosted(topArticles.filter(a => !a.isNoNewsMessage));
+            
         } else {
-            await interaction.editReply('直近24時間以内にめぼしいニュースはありませんでしたヨモ');
+            await interaction.editReply('記事の処理中にエラーが発生しました。');
         }
         
-        // 手動取得した記事も投稿済みとしてマーク
-        if (topArticles.length > 0 && !topArticles[0].isNoNewsMessage) {
-            await newsService.markArticlesAsPosted(topArticles);
-        }
     } catch (error) {
-        console.error('Error in news command:', error);
-        await interaction.editReply('ニュースの取得中にエラーが発生しました。');
+        console.error('❌ ニュースコマンドエラー:', error);
+        await interaction.editReply('ニュースの取得中にエラーが発生しました。`/websearch`でシステム状況をご確認ください。');
     }
 }
 
@@ -436,7 +491,7 @@ async function handleAnalyticsCommand(interaction) {
             fields: [
                 {
                     name: '📈 総合統計',
-                    value: `総記事数: ${analytics.overall.total_articles || 0}\n平均信頼度: ${Math.round(analytics.overall.avg_credibility || 0)}/100\n平均話題性: ${Math.round(analytics.overall.avg_relevance || 0)}/100\n平均速報性: ${Math.round(analytics.overall.avg_urgency || 0)}/100\n総合平均スコア: ${Math.round(analytics.overall.avg_total || 0)}/300`,
+                    value: `総記事数: ${analytics.overall.total_articles || 0}\n平均信頼度: ${Math.round(analytics.overall.avg_credibility || 0)}/100\n平均話題性: ${Math.round(analytics.overall.avg_relevance || 0)}/100\n平均速報性: ${Math.round(analytics.overall.avg_urgency || 0)}/100\n総合平均スコア: ${Math.round(analytics.overall.avg_total || 0)}/300\n実記事成功率: ${analytics.overall.success_rate || '0%'}`,
                     inline: true
                 },
                 {
@@ -531,7 +586,7 @@ async function handleHelpCommand(interaction) {
         fields: [
             {
                 name: '🗞️ 自動ニュース機能',
-                value: '毎日朝9時・夜18時に最新ボードゲームニュースを自動投稿',
+                value: '毎日朝7時・夜19時に最新ボードゲームニュースを自動投稿',
                 inline: false
             },
             {
@@ -557,7 +612,7 @@ async function handleHelpCommand(interaction) {
         ],
         color: 0x0099ff,
         footer: {
-            text: 'Powered by Gemini AI'
+            text: 'Powered by Gemini AI & Real-time Web Search'
         }
     };
     
@@ -587,7 +642,12 @@ const server = http.createServer((req, res) => {
         status: 'YOLUBot is running',
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
-        version: '1.0.3'
+        version: '2.0.0',
+        features: {
+            webSearch: 'enabled',
+            realTimeNews: 'enabled',
+            aiConversation: 'enabled'
+        }
     }));
 });
 

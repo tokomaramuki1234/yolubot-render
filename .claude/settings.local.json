@@ -13,7 +13,9 @@
       "Bash(npm run deploy-commands:*)",
       "Bash(npm start)",
       "Bash(cp:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(del database.sqlite)",
+      "Bash(git log:*)"
     ],
     "deny": []
   }

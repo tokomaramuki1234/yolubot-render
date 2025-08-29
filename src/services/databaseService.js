@@ -4,47 +4,60 @@ const path = require('path');
 
 class DatabaseService {
     constructor() {
-        // Render無料プランではSQLiteを強制使用
-        this.isPostgres = false;
+        // 環境に応じたDB選択（より明確な判定）
+        this.isPostgres = process.env.DATABASE_URL && process.env.NODE_ENV === 'production';
         this.dbPath = path.join(__dirname, '../../database.sqlite');
         this.db = null;
         this.pgClient = null;
+        this.isInitialized = false;
+        
+        console.log(`🗄️ データベース初期化: ${this.isPostgres ? 'PostgreSQL' : 'SQLite'}`);
     }
 
     async init() {
-        if (this.isPostgres) {
-            return await this.initPostgreSQL();
-        } else {
-            return await this.initSQLite();
+        if (this.isInitialized) {
+            console.log('🗄️ データベースはすでに初期化済み');
+            return;
+        }
+
+        try {
+            if (this.isPostgres) {
+                await this.initPostgreSQL();
+            } else {
+                await this.initSQLite();
+            }
+            this.isInitialized = true;
+            console.log('✅ データベース初期化完了');
+        } catch (error) {
+            console.error('❌ データベース初期化失敗:', error);
+            throw error;
         }
     }
 
     async initPostgreSQL() {
-        try {
-            this.pgClient = new Client({
-                connectionString: process.env.DATABASE_URL,
-                ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-            });
+        this.pgClient = new Client({
+            connectionString: process.env.DATABASE_URL,
+            ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+        });
 
-            await this.pgClient.connect();
-            console.log('PostgreSQL connected successfully');
-            await this.createPostgresTables();
-            return Promise.resolve();
-        } catch (error) {
-            console.error('PostgreSQL connection error:', error);
-            return Promise.reject(error);
-        }
+        await this.pgClient.connect();
+        await this.createPostgresTables();
+        console.log('✅ PostgreSQL接続成功');
     }
 
     async initSQLite() {
         return new Promise((resolve, reject) => {
-            this.db = new sqlite3.Database(this.dbPath, (err) => {
+            this.db = new sqlite3.Database(this.dbPath, async (err) => {
                 if (err) {
-                    console.error('Error opening SQLite database:', err);
                     reject(err);
                 } else {
-                    console.log('SQLite database connected successfully');
-                    this.createSQLiteTables().then(resolve).catch(reject);
+                    try {
+                        await this.createSQLiteTables();
+                        console.log('✅ SQLite接続成功');
+                        resolve();
+                    } catch (createErr) {
+                        reject(createErr);
+                    }
                 }
             });
         });
@@ -52,6 +65,7 @@ class DatabaseService {
 
     async createPostgresTables() {
         const tables = [
+            // 会話履歴テーブル
             `CREATE TABLE IF NOT EXISTS conversations (
                 id SERIAL PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -59,6 +73,7 @@ class DatabaseService {
                 bot_response TEXT NOT NULL,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )`,
+            // ユーザー設定テーブル
             `CREATE TABLE IF NOT EXISTS user_preferences (
                 id SERIAL PRIMARY KEY,
                 user_id TEXT UNIQUE NOT NULL,
@@ -68,13 +83,26 @@ class DatabaseService {
                 favorite_mechanics TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )`,
+            // ニュース投稿テーブル（改善版）
             `CREATE TABLE IF NOT EXISTS news_posts (
                 id SERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
                 url TEXT UNIQUE NOT NULL,
                 description TEXT,
-                posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )`
+                source TEXT,
+                credibility_score INTEGER DEFAULT 0,
+                relevance_score INTEGER DEFAULT 0,
+                urgency_score INTEGER DEFAULT 0,
+                total_score INTEGER DEFAULT 0,
+                search_keywords TEXT,
+                published_at TIMESTAMP,
+                posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_fallback BOOLEAN DEFAULT FALSE
+            )`,
+            // インデックス作成
+            `CREATE INDEX IF NOT EXISTS idx_news_posts_url ON news_posts(url)`,
+            `CREATE INDEX IF NOT EXISTS idx_news_posts_posted_at ON news_posts(posted_at)`,
+            `CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id)`
         ];
 
         for (const query of tables) {
@@ -84,6 +112,7 @@ class DatabaseService {
 
     async createSQLiteTables() {
         const tables = [
+            // 会話履歴テーブル
             `CREATE TABLE IF NOT EXISTS conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
@@ -91,6 +120,7 @@ class DatabaseService {
                 bot_response TEXT NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )`,
+            // ユーザー設定テーブル
             `CREATE TABLE IF NOT EXISTS user_preferences (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT UNIQUE NOT NULL,
@@ -100,6 +130,7 @@ class DatabaseService {
                 favorite_mechanics TEXT,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )`,
+            // ニュース投稿テーブル（改善版）
             `CREATE TABLE IF NOT EXISTS news_posts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
@@ -112,27 +143,13 @@ class DatabaseService {
                 total_score INTEGER DEFAULT 0,
                 search_keywords TEXT,
                 published_at DATETIME,
-                posted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                posted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                is_fallback INTEGER DEFAULT 0
             )`,
-            `CREATE TABLE IF NOT EXISTS article_feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                article_url TEXT NOT NULL,
-                user_id TEXT,
-                click_count INTEGER DEFAULT 0,
-                dwell_time INTEGER DEFAULT 0,
-                user_rating INTEGER,
-                feedback_type TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`,
-            `CREATE TABLE IF NOT EXISTS search_analytics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                search_keyword TEXT NOT NULL,
-                layer_type TEXT NOT NULL,
-                success_rate REAL DEFAULT 0.0,
-                avg_relevance_score REAL DEFAULT 0.0,
-                usage_count INTEGER DEFAULT 0,
-                last_used DATETIME DEFAULT CURRENT_TIMESTAMP
-            )`
+            // インデックス作成
+            `CREATE INDEX IF NOT EXISTS idx_news_posts_url ON news_posts(url)`,
+            `CREATE INDEX IF NOT EXISTS idx_news_posts_posted_at ON news_posts(posted_at)`,
+            `CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id)`
         ];
 
         for (const query of tables) {
@@ -142,18 +159,11 @@ class DatabaseService {
 
     async runQuery(query, params = []) {
         if (this.isPostgres) {
-            try {
-                const result = await this.pgClient.query(query, params);
-                return result;
-            } catch (error) {
-                console.error('PostgreSQL query error:', error);
-                throw error;
-            }
+            return await this.pgClient.query(query, params);
         } else {
             return new Promise((resolve, reject) => {
                 this.db.run(query, params, function(err) {
                     if (err) {
-                        console.error('SQLite query error:', err);
                         reject(err);
                     } else {
                         resolve(this);
@@ -165,38 +175,34 @@ class DatabaseService {
 
     async getQuery(query, params = []) {
         if (this.isPostgres) {
-            try {
-                const result = await this.pgClient.query(query, params);
-                return result.rows;
-            } catch (error) {
-                console.error('PostgreSQL query error:', error);
-                throw error;
-            }
+            const result = await this.pgClient.query(query, params);
+            return result.rows;
         } else {
             return new Promise((resolve, reject) => {
                 this.db.all(query, params, (err, rows) => {
                     if (err) {
-                        console.error('SQLite query error:', err);
                         reject(err);
                     } else {
-                        resolve(rows);
+                        resolve(rows || []);
                     }
                 });
             });
         }
     }
 
+    // メッセージ保存（エラーハンドリング改善）
     async saveMessage(userId, userMessage, botResponse) {
         const query = `INSERT INTO conversations (user_id, user_message, bot_response) 
                        VALUES ($1, $2, $3)`;
         try {
             await this.runQuery(query, [userId, userMessage, botResponse]);
-            console.log('Message saved to database');
         } catch (error) {
-            console.error('Error saving message:', error);
+            console.error('メッセージ保存エラー:', error);
+            throw error; // エラーを隠さない
         }
     }
 
+    // 会話履歴取得（安全性向上）
     async getConversationHistory(userId, limit = 10) {
         const query = `SELECT user_message, bot_response, timestamp 
                        FROM conversations 
@@ -204,14 +210,64 @@ class DatabaseService {
                        ORDER BY timestamp DESC 
                        LIMIT $2`;
         try {
-            const rows = await this.getQuery(query, [userId, limit]);
-            return rows.reverse();
+            const rows = await this.getQuery(query, [userId, Math.max(1, parseInt(limit))]);
+            return rows.reverse() || [];
         } catch (error) {
-            console.error('Error getting conversation history:', error);
+            console.error('会話履歴取得エラー:', error);
             return [];
         }
     }
 
+    // ニュース投稿保存（改善版）
+    async saveNewsPost(article) {
+        // 引数が単一のarticleオブジェクトの場合の処理
+        if (typeof article === 'string') {
+            // 古い形式のパラメータ（title, url, description）をサポート
+            const [title, url, description, extraData] = arguments;
+            article = {
+                title,
+                url,
+                description,
+                ...extraData
+            };
+        }
+
+        if (!article.title || !article.url) {
+            throw new Error('タイトルとURLは必須です');
+        }
+
+        const query = this.isPostgres
+            ? `INSERT INTO news_posts (title, url, description, source, credibility_score, 
+               relevance_score, urgency_score, total_score, search_keywords, published_at, is_fallback) 
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               ON CONFLICT (url) DO NOTHING`
+            : `INSERT OR IGNORE INTO news_posts (title, url, description, source, credibility_score,
+               relevance_score, urgency_score, total_score, search_keywords, published_at, is_fallback) 
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`;
+
+        try {
+            const totalScore = (article.totalScore || 0);
+            
+            await this.runQuery(query, [
+                article.title, 
+                article.url, 
+                article.description || '',
+                article.source || 'Unknown',
+                article.credibilityScore || 0,
+                article.relevanceScore || 0,
+                article.urgencyScore || 0,
+                totalScore,
+                article.searchKeyword || '',
+                article.publishedDate || new Date().toISOString(),
+                article.isFallback ? (this.isPostgres ? true : 1) : (this.isPostgres ? false : 0)
+            ]);
+        } catch (error) {
+            console.error('ニュース投稿保存エラー:', error);
+            throw error;
+        }
+    }
+
+    // ユーザー設定保存（JSON処理安全性向上）
     async saveUserPreferences(userId, preferences) {
         const query = this.isPostgres 
             ? `INSERT INTO user_preferences 
@@ -235,12 +291,13 @@ class DatabaseService {
                 preferences.experience_level || '',
                 JSON.stringify(preferences.favorite_mechanics || [])
             ]);
-            console.log('User preferences saved');
         } catch (error) {
-            console.error('Error saving user preferences:', error);
+            console.error('ユーザー設定保存エラー:', error);
+            throw error;
         }
     }
 
+    // ユーザー設定取得（JSON解析安全性向上）
     async getUserPreferences(userId) {
         const query = `SELECT preferences, interests, experience_level, favorite_mechanics 
                        FROM user_preferences 
@@ -250,145 +307,96 @@ class DatabaseService {
             if (rows.length > 0) {
                 const row = rows[0];
                 return {
-                    preferences: JSON.parse(row.preferences || '[]'),
-                    interests: JSON.parse(row.interests || '[]'),
+                    preferences: this.safeJSONParse(row.preferences, []),
+                    interests: this.safeJSONParse(row.interests, []),
                     experience_level: row.experience_level || '',
-                    favorite_mechanics: JSON.parse(row.favorite_mechanics || '[]')
+                    favorite_mechanics: this.safeJSONParse(row.favorite_mechanics, [])
                 };
             }
             return null;
         } catch (error) {
-            console.error('Error getting user preferences:', error);
+            console.error('ユーザー設定取得エラー:', error);
             return null;
         }
     }
 
-    async saveNewsPost(title, url, description, article = {}) {
-        const query = this.isPostgres
-            ? `INSERT INTO news_posts (title, url, description, source, credibility_score, 
-               relevance_score, urgency_score, total_score, search_keywords, published_at) 
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-               ON CONFLICT (url) DO NOTHING`
-            : `INSERT OR IGNORE INTO news_posts (title, url, description, source, credibility_score,
-               relevance_score, urgency_score, total_score, search_keywords, published_at) 
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`;
+    // 安全なJSON解析
+    safeJSONParse(jsonString, defaultValue) {
         try {
-            const totalScore = (article.credibilityScore || 0) + (article.relevanceScore || 0) + (article.urgencyScore || 0);
-            await this.runQuery(query, [
-                title, 
-                url, 
-                description,
-                article.source || 'Unknown',
-                article.credibilityScore || 0,
-                article.relevanceScore || 0,
-                article.urgencyScore || 0,
-                totalScore,
-                article.searchKeyword || '',
-                article.publishedAt || new Date().toISOString()
-            ]);
-        } catch (error) {
-            console.error('Error saving news post:', error);
+            return JSON.parse(jsonString || '[]');
+        } catch {
+            return defaultValue;
         }
     }
 
-    async saveArticleFeedback(articleUrl, userId, feedbackData) {
-        const query = `INSERT INTO article_feedback 
-                       (article_url, user_id, click_count, dwell_time, user_rating, feedback_type) 
-                       VALUES ($1, $2, $3, $4, $5, $6)`;
-        try {
-            await this.runQuery(query, [
-                articleUrl,
-                userId,
-                feedbackData.clickCount || 0,
-                feedbackData.dwellTime || 0,
-                feedbackData.userRating || null,
-                feedbackData.feedbackType || 'view'
-            ]);
-        } catch (error) {
-            console.error('Error saving article feedback:', error);
-        }
-    }
-
-    async updateSearchAnalytics(keyword, layerType, successRate, avgRelevance) {
-        const updateQuery = `INSERT OR REPLACE INTO search_analytics 
-                           (search_keyword, layer_type, success_rate, avg_relevance_score, 
-                           usage_count, last_used) 
-                           VALUES ($1, $2, $3, $4, 
-                           COALESCE((SELECT usage_count FROM search_analytics 
-                           WHERE search_keyword = $1 AND layer_type = $2), 0) + 1,
-                           CURRENT_TIMESTAMP)`;
-        try {
-            await this.runQuery(updateQuery, [keyword, layerType, successRate, avgRelevance]);
-        } catch (error) {
-            console.error('Error updating search analytics:', error);
-        }
-    }
-
-    async getTopPerformingKeywords(layerType, limit = 10) {
-        const query = `SELECT search_keyword, success_rate, avg_relevance_score, usage_count 
-                       FROM search_analytics 
-                       WHERE layer_type = $1 
-                       ORDER BY (success_rate * avg_relevance_score) DESC 
-                       LIMIT $2`;
-        try {
-            return await this.getQuery(query, [layerType, limit]);
-        } catch (error) {
-            console.error('Error getting top performing keywords:', error);
-            return [];
-        }
-    }
-
+    // ニュース分析データ取得（改善版）
     async getNewsAnalytics(days = 30) {
-        const queries = this.isPostgres ? [
-            `SELECT AVG(credibility_score) as avg_credibility, 
-             AVG(relevance_score) as avg_relevance, 
-             AVG(urgency_score) as avg_urgency,
-             AVG(total_score) as avg_total,
-             COUNT(*) as total_articles
-             FROM news_posts 
-             WHERE posted_at > NOW() - INTERVAL '${days} days'`,
-            `SELECT source, COUNT(*) as article_count, AVG(total_score) as avg_score
-             FROM news_posts 
-             WHERE posted_at > NOW() - INTERVAL '${days} days'
-             GROUP BY source 
-             ORDER BY avg_score DESC`
-        ] : [
-            `SELECT AVG(credibility_score) as avg_credibility, 
-             AVG(relevance_score) as avg_relevance, 
-             AVG(urgency_score) as avg_urgency,
-             AVG(total_score) as avg_total,
-             COUNT(*) as total_articles
-             FROM news_posts 
-             WHERE posted_at > datetime('now', '-${days} days')`,
-            `SELECT source, COUNT(*) as article_count, AVG(total_score) as avg_score
-             FROM news_posts 
-             WHERE posted_at > datetime('now', '-${days} days')
-             GROUP BY source 
-             ORDER BY avg_score DESC`
-        ];
+        const overallQuery = this.isPostgres
+            ? `SELECT 
+                AVG(credibility_score) as avg_credibility, 
+                AVG(relevance_score) as avg_relevance, 
+                AVG(urgency_score) as avg_urgency,
+                AVG(total_score) as avg_total,
+                COUNT(*) as total_articles,
+                COUNT(CASE WHEN is_fallback = false THEN 1 END) as real_articles,
+                COUNT(CASE WHEN is_fallback = true THEN 1 END) as fallback_articles
+               FROM news_posts 
+               WHERE posted_at > NOW() - INTERVAL '${days} days'`
+            : `SELECT 
+                AVG(credibility_score) as avg_credibility, 
+                AVG(relevance_score) as avg_relevance, 
+                AVG(urgency_score) as avg_urgency,
+                AVG(total_score) as avg_total,
+                COUNT(*) as total_articles,
+                COUNT(CASE WHEN is_fallback = 0 THEN 1 END) as real_articles,
+                COUNT(CASE WHEN is_fallback = 1 THEN 1 END) as fallback_articles
+               FROM news_posts 
+               WHERE posted_at > datetime('now', '-${days} days')`;
+
+        const sourceQuery = this.isPostgres
+            ? `SELECT source, COUNT(*) as article_count, AVG(total_score) as avg_score,
+               COUNT(CASE WHEN is_fallback = false THEN 1 END) as real_count
+               FROM news_posts 
+               WHERE posted_at > NOW() - INTERVAL '${days} days'
+               GROUP BY source 
+               ORDER BY avg_score DESC`
+            : `SELECT source, COUNT(*) as article_count, AVG(total_score) as avg_score,
+               COUNT(CASE WHEN is_fallback = 0 THEN 1 END) as real_count
+               FROM news_posts 
+               WHERE posted_at > datetime('now', '-${days} days')
+               GROUP BY source 
+               ORDER BY avg_score DESC`;
 
         try {
-            const [overallStats] = await this.getQuery(queries[0]);
-            const sourceStats = await this.getQuery(queries[1]);
+            const [overallStats] = await this.getQuery(overallQuery);
+            const sourceStats = await this.getQuery(sourceQuery);
             
             return {
-                overall: overallStats,
+                overall: {
+                    ...overallStats,
+                    success_rate: overallStats.total_articles > 0 ? 
+                        (overallStats.real_articles / overallStats.total_articles * 100).toFixed(1) + '%' : '0%'
+                },
                 bySource: sourceStats
             };
         } catch (error) {
-            console.error('Error getting news analytics:', error);
-            return { overall: {}, bySource: [] };
+            console.error('分析データ取得エラー:', error);
+            return { 
+                overall: { total_articles: 0, success_rate: '0%' }, 
+                bySource: [] 
+            };
         }
     }
 
+    // 最近のユーザー取得（エラーハンドリング改善）
     async getRecentUsers(days = 7) {
         const query = this.isPostgres
-            ? `SELECT DISTINCT user_id, COUNT(*) as message_count
+            ? `SELECT user_id, COUNT(*) as message_count
                FROM conversations 
                WHERE timestamp > NOW() - INTERVAL '${days} days'
                GROUP BY user_id
                ORDER BY message_count DESC`
-            : `SELECT DISTINCT user_id, COUNT(*) as message_count
+            : `SELECT user_id, COUNT(*) as message_count
                FROM conversations 
                WHERE timestamp > datetime('now', '-${days} days')
                GROUP BY user_id
@@ -396,53 +404,55 @@ class DatabaseService {
         try {
             return await this.getQuery(query);
         } catch (error) {
-            console.error('Error getting recent users:', error);
+            console.error('最近のユーザー取得エラー:', error);
             return [];
         }
     }
 
+    // メッセージ統計（改善版）
     async getMessageStats() {
-        const queries = this.isPostgres ? [
-            'SELECT COUNT(*) as total_messages FROM conversations',
-            'SELECT COUNT(DISTINCT user_id) as unique_users FROM conversations',
-            'SELECT COUNT(*) as messages_today FROM conversations WHERE DATE(timestamp) = CURRENT_DATE'
-        ] : [
-            'SELECT COUNT(*) as total_messages FROM conversations',
-            'SELECT COUNT(DISTINCT user_id) as unique_users FROM conversations',
-            'SELECT COUNT(*) as messages_today FROM conversations WHERE date(timestamp) = date("now")'
-        ];
-
         try {
-            const results = await Promise.all(
-                queries.map(query => this.getQuery(query))
-            );
+            const queries = this.isPostgres ? [
+                'SELECT COUNT(*) as total FROM conversations',
+                'SELECT COUNT(DISTINCT user_id) as unique FROM conversations',
+                'SELECT COUNT(*) as today FROM conversations WHERE DATE(timestamp) = CURRENT_DATE'
+            ] : [
+                'SELECT COUNT(*) as total FROM conversations',
+                'SELECT COUNT(DISTINCT user_id) as unique FROM conversations',
+                'SELECT COUNT(*) as today FROM conversations WHERE date(timestamp) = date("now")'
+            ];
+
+            const results = await Promise.all(queries.map(q => this.getQuery(q)));
 
             return {
-                totalMessages: parseInt(results[0][0].total_messages),
-                uniqueUsers: parseInt(results[1][0].unique_users),
-                messagesToday: parseInt(results[2][0].messages_today)
+                totalMessages: parseInt(results[0][0]?.total || 0),
+                uniqueUsers: parseInt(results[1][0]?.unique || 0),
+                messagesToday: parseInt(results[2][0]?.today || 0)
             };
         } catch (error) {
-            console.error('Error getting message stats:', error);
+            console.error('統計取得エラー:', error);
             return { totalMessages: 0, uniqueUsers: 0, messagesToday: 0 };
         }
     }
 
-    close() {
-        if (this.isPostgres && this.pgClient) {
-            this.pgClient.end().then(() => {
-                console.log('PostgreSQL connection closed');
-            }).catch(err => {
-                console.error('Error closing PostgreSQL connection:', err);
-            });
-        } else if (this.db) {
-            this.db.close((err) => {
-                if (err) {
-                    console.error('Error closing SQLite database:', err);
-                } else {
-                    console.log('SQLite database connection closed');
-                }
-            });
+    // 接続終了（改善版）
+    async close() {
+        try {
+            if (this.isPostgres && this.pgClient) {
+                await this.pgClient.end();
+                console.log('PostgreSQL接続終了');
+            } else if (this.db) {
+                await new Promise((resolve) => {
+                    this.db.close((err) => {
+                        if (err) console.error('SQLite終了エラー:', err);
+                        else console.log('SQLite接続終了');
+                        resolve();
+                    });
+                });
+            }
+            this.isInitialized = false;
+        } catch (error) {
+            console.error('データベース終了エラー:', error);
         }
     }
 }
