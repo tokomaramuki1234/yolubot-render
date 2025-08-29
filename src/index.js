@@ -337,14 +337,21 @@ async function handleUserQuestion(message) {
         
         console.log(`📊 [DEBUG] 会話履歴: ${conversationHistory.length}件, 設定: ${userPreferences ? 'あり' : 'なし'}`);
         
+        // メッセージからBOTメンションを除去
+        const cleanMessage = message.content
+            .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')  // BOTメンションを除去
+            .trim();  // 空白を除去
+        
+        console.log(`🧹 [DEBUG] メッセージクリーニング: "${message.content}" → "${cleanMessage}"`);
+        
         // 🔥 重要: AI応答を1回だけ生成
-        const response = await geminiService.generateResponse(message.content, conversationHistory, userPreferences);
+        const response = await geminiService.generateResponse(cleanMessage, conversationHistory, userPreferences);
         
         console.log(`✍️ [DEBUG] AI応答生成完了: ${response.length}文字`);
         console.log(`📝 [DEBUG] 応答内容プレビュー: "${response.substring(0, 100)}..."`);
         
         // データベース保存
-        await databaseService.saveMessage(userId, message.content, response);
+        await databaseService.saveMessage(userId, cleanMessage, response);
         console.log(`💾 [DEBUG] データベース保存完了`);
         
         const messageCount = conversationHistory.length + 1;
