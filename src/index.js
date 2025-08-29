@@ -400,6 +400,20 @@ async function handleUserQuestion(message) {
     }
 }
 
+async function updateUserPreferences(userId) {
+    try {
+        const conversationHistory = await databaseService.getConversationHistory(userId, 20);
+        if (conversationHistory.length < 3) return;
+        
+        const preferences = await geminiService.analyzeUserPreferences(conversationHistory);
+        if (preferences) {
+            await databaseService.saveUserPreferences(userId, preferences);
+            console.log(`Updated preferences for user ${userId}`);
+        }
+    } catch (error) {
+        console.error('Error updating user preferences:', error);
+    }
+}
 
 async function analyzeUserPreferences() {
     try {
@@ -894,7 +908,7 @@ const server = http.createServer((req, res) => {
         status: 'YOLUBot is running',
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
-        version: '2.0.2',
+        version: '2.0.3',
         features: {
             webSearch: 'enabled',
             realTimeNews: 'enabled',
