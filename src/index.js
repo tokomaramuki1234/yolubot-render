@@ -15,6 +15,11 @@ const client = new Client({
     ],
 });
 
+// 重複防止・レート制限対策
+const userCooldowns = new Map();
+const processingMessages = new Set();
+const COOLDOWN_DURATION = 5000; // 5秒
+
 const geminiService = new GeminiService();
 const webSearchService = new WebSearchService();
 const newsService = new AdvancedNewsService(webSearchService);
@@ -59,11 +64,72 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 client.on(Events.MessageCreate, async (message) => {
-    if (message.author.bot) return;
-    if (message.content.startsWith('!')) return;
+    // 厳密なBot判定
+    if (message.author.bot || message.author.system) {
+        console.log(`🤖 Bot或いはSystemメッセージをスキップ: ${message.author.tag}`);
+        return;
+    }
     
-    if (message.mentions.has(client.user)) {
+    // Webhook判定
+    if (message.webhookId) {
+        console.log(`🔗 Webhookメッセージをスキップ: ${message.webhookId}`);
+        return;
+    }
+    
+    // コマンドプレフィックスのスキップ
+    if (message.content.startsWith('!') || message.content.startsWith('/')) {
+        return;
+    }
+    
+    // メンション判定（より厳密に）
+    if (!message.mentions.has(client.user)) {
+        return;
+    }
+    
+    // 重複処理防止
+    if (processingMessages.has(message.id)) {
+        console.log(`⚠️ 重複処理をスキップ: ${message.id}`);
+        return;
+    }
+    
+    // クールダウンチェック
+    const userId = message.author.id;
+    const now = Date.now();
+    
+    if (userCooldowns.has(userId)) {
+        const cooldownExpiry = userCooldowns.get(userId);
+        if (now < cooldownExpiry) {
+            const remainingTime = Math.ceil((cooldownExpiry - now) / 1000);
+            console.log(`❄️ ユーザー ${message.author.tag} はクールダウン中 (残り${remainingTime}秒)`);
+            
+            // クールダウン中の通知（1回のみ）
+            try {
+                await message.react('⏰');
+            } catch (error) {
+                console.error('クールダウンリアクション失敗:', error);
+            }
+            return;
+        }
+    }
+    
+    // 処理開始
+    processingMessages.add(message.id);
+    userCooldowns.set(userId, now + COOLDOWN_DURATION);
+    
+    console.log(`📝 ユーザー質問処理開始: ${message.author.tag} - "${message.content.substring(0, 50)}..."`);
+    
+    try {
         await handleUserQuestion(message);
+    } catch (error) {
+        console.error(`❌ ユーザー質問処理エラー (${message.author.tag}):`, error);
+    } finally {
+        // 処理完了後のクリーンアップ
+        processingMessages.delete(message.id);
+        
+        // 10分後にクリーンアップ（メモリリーク防止）
+        setTimeout(() => {
+            processingMessages.delete(message.id);
+        }, 10 * 60 * 1000);
     }
 });
 
@@ -205,7 +271,10 @@ async function postBoardGameNews() {
 
 async function handleUserQuestion(message) {
     try {
+        // 入力指示の送信
         await message.channel.sendTyping();
+        
+        console.log(`🧠 AI応答生成開始: ${message.author.tag}`);
         
         const conversationHistory = await databaseService.getConversationHistory(message.author.id, 10);
         const userPreferences = await databaseService.getUserPreferences(message.author.id);
@@ -220,10 +289,30 @@ async function handleUserQuestion(message) {
             await updateUserPreferences(message.author.id);
         }
         
-        await message.reply(response);
+        // Discord APIレート制限対策
+        const MAX_MESSAGE_LENGTH = 2000;
+        if (response.length > MAX_MESSAGE_LENGTH) {
+            const chunks = response.match(/.{1,2000}/g);
+            await message.reply(chunks[0]);
+            
+            for (let i = 1; i < chunks.length; i++) {
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 1秒待機
+                await message.channel.send(chunks[i]);
+            }
+        } else {
+            await message.reply(response);
+        }
+        
+        console.log(`✅ AI応答送信完了: ${message.author.tag}`);
+        
     } catch (error) {
-        console.error('Error handling user question:', error);
-        await message.reply('申し訳ございません。エラーが発生しました。');
+        console.error(`❌ ユーザー質問処理エラー (${message.author.tag}):`, error);
+        
+        try {
+            await message.reply('申し訳ございません。エラーが発生しました。しばらく時間をおいて再度お試しください。');
+        } catch (replyError) {
+            console.error(`❌ エラー返信送信失敗 (${message.author.tag}):`, replyError);
+        }
     }
 }
 
@@ -704,6 +793,20 @@ function getTotalScore(article) {
     return (article.credibilityScore || 0) + (article.relevanceScore || 0) + (article.urgencyScore || 0);
 }
 
+// 定期的なメモリクリーンアップ（1時間毎）
+setInterval(() => {
+    const now = Date.now();
+    
+    // 期限切れのクールダウンを削除
+    for (const [userId, expiry] of userCooldowns.entries()) {
+        if (now > expiry) {
+            userCooldowns.delete(userId);
+        }
+    }
+    
+    console.log(`🧹 メモリクリーンアップ完了: クールダウン${userCooldowns.size}件, 処理中${processingMessages.size}件`);
+}, 60 * 60 * 1000);
+
 // Render.com用の簡易HTTPサーバー（ポートスキャン対策）
 const http = require('http');
 const port = process.env.PORT || 3000;
@@ -714,11 +817,15 @@ const server = http.createServer((req, res) => {
         status: 'YOLUBot is running',
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
-        version: '2.0.0',
+        version: '2.0.1',
         features: {
             webSearch: 'enabled',
             realTimeNews: 'enabled',
             aiConversation: 'enabled'
+        },
+        cooldowns: {
+            activeUsers: userCooldowns.size,
+            processingMessages: processingMessages.size
         }
     }));
 });
