@@ -10,7 +10,10 @@
       "Bash(npm install:*)",
       "Bash(rm:*)",
       "Bash(node:*)",
-      "Bash(npm run deploy-commands:*)"
+      "Bash(npm run deploy-commands:*)",
+      "Bash(npm start)",
+      "Bash(cp:*)",
+      "Bash(taskkill:*)"
     ],
     "deny": []
   }

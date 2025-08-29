@@ -569,7 +569,7 @@ const server = http.createServer((req, res) => {
         status: 'YOLUBot is running',
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
-        version: '1.0.2'
+        version: '1.0.3'
     }));
 });
 
