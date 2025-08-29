@@ -331,66 +331,75 @@ async function postBoardGameNews() {
 }
 
 async function handleUserQuestion(message) {
+    const messageId = message.id;
+    const userId = message.author.id;
+    const userTag = message.author.tag;
+    
+    console.log(`🔍 [DEBUG] handleUserQuestion開始: ${userTag} (${messageId})`);
+    
     try {
         // 入力指示の送信
         await message.channel.sendTyping();
         
-        console.log(`🧠 AI応答生成開始: ${message.author.tag}`);
+        console.log(`🧠 [DEBUG] AI応答生成開始: ${userTag}`);
         
-        const conversationHistory = await databaseService.getConversationHistory(message.author.id, 10);
-        const userPreferences = await databaseService.getUserPreferences(message.author.id);
+        const conversationHistory = await databaseService.getConversationHistory(userId, 10);
+        const userPreferences = await databaseService.getUserPreferences(userId);
         
+        console.log(`📊 [DEBUG] 会話履歴: ${conversationHistory.length}件, 設定: ${userPreferences ? 'あり' : 'なし'}`);
+        
+        // 🔥 重要: AI応答を1回だけ生成
         const response = await geminiService.generateResponse(message.content, conversationHistory, userPreferences);
         
-        await databaseService.saveMessage(message.author.id, message.content, response);
+        console.log(`✍️ [DEBUG] AI応答生成完了: ${response.length}文字`);
+        console.log(`📝 [DEBUG] 応答内容プレビュー: "${response.substring(0, 100)}..."`);
+        
+        // データベース保存
+        await databaseService.saveMessage(userId, message.content, response);
+        console.log(`💾 [DEBUG] データベース保存完了`);
         
         const messageCount = conversationHistory.length + 1;
         if (messageCount % 5 === 0) {
-            console.log(`Analyzing preferences for user ${message.author.id} after ${messageCount} messages`);
-            await updateUserPreferences(message.author.id);
+            console.log(`📈 [DEBUG] ユーザー設定分析実行: ${userId} (${messageCount}メッセージ後)`);
+            await updateUserPreferences(userId);
         }
         
-        // Discord APIレート制限対策
+        // 🔥 重要: リプライを1回だけ送信
+        console.log(`📤 [DEBUG] リプライ送信準備: ${userTag}`);
+        
         const MAX_MESSAGE_LENGTH = 2000;
         if (response.length > MAX_MESSAGE_LENGTH) {
+            console.log(`📏 [DEBUG] 長文対応: ${response.length}文字を分割`);
             const chunks = response.match(/.{1,2000}/g);
+            
+            console.log(`📤 [DEBUG] 1回目のリプライ送信: ${chunks[0].length}文字`);
             await message.reply(chunks[0]);
             
             for (let i = 1; i < chunks.length; i++) {
+                console.log(`📤 [DEBUG] 追加メッセージ送信 ${i+1}/${chunks.length}: ${chunks[i].length}文字`);
                 await new Promise(resolve => setTimeout(resolve, 1000)); // 1秒待機
                 await message.channel.send(chunks[i]);
             }
         } else {
+            console.log(`📤 [DEBUG] 単一リプライ送信: ${response.length}文字`);
             await message.reply(response);
         }
         
-        console.log(`✅ AI応答送信完了: ${message.author.tag}`);
+        console.log(`✅ [DEBUG] AI応答送信完了: ${userTag} (メッセージID: ${messageId})`);
         
     } catch (error) {
-        console.error(`❌ ユーザー質問処理エラー (${message.author.tag}):`, error);
+        console.error(`❌ [ERROR] ユーザー質問処理エラー (${userTag}, ${messageId}):`, error);
+        console.error(`❌ [ERROR] エラースタック:`, error.stack);
         
         try {
+            console.log(`🚨 [DEBUG] エラー応答送信: ${userTag}`);
             await message.reply('申し訳ございません。エラーが発生しました。しばらく時間をおいて再度お試しください。');
         } catch (replyError) {
-            console.error(`❌ エラー返信送信失敗 (${message.author.tag}):`, replyError);
+            console.error(`❌ [ERROR] エラー返信送信失敗 (${userTag}):`, replyError);
         }
     }
 }
 
-async function updateUserPreferences(userId) {
-    try {
-        const conversationHistory = await databaseService.getConversationHistory(userId, 20);
-        if (conversationHistory.length < 3) return;
-        
-        const preferences = await geminiService.analyzeUserPreferences(conversationHistory);
-        if (preferences) {
-            await databaseService.saveUserPreferences(userId, preferences);
-            console.log(`Updated preferences for user ${userId}`);
-        }
-    } catch (error) {
-        console.error('Error updating user preferences:', error);
-    }
-}
 
 async function analyzeUserPreferences() {
     try {
