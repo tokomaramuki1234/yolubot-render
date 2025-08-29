@@ -20,6 +20,7 @@ const userCooldowns = new Map();
 const processingMessages = new Set();
 const processedMessages = new Map(); // 新規追加：メッセージ重複防止
 const sentMessages = new Map(); // 送信済みメッセージの重複防止
+const replyInProgress = new Set(); // 送信中メッセージID追跡
 const COOLDOWN_DURATION = 5000; // 5秒
 const MESSAGE_CACHE_DURATION = 30000; // 30秒
 
@@ -386,8 +387,17 @@ async function handleUserQuestion(message) {
                 await message.channel.send(chunks[i]);
             }
         } else {
-            // 重複送信防止チェック
+            // 多重送信完全防止システム
+            const messageKey = message.id;
             const responseHash = `${message.id}-${response.slice(0, 50)}`;
+            
+            // 既に送信中の場合はスキップ
+            if (replyInProgress.has(messageKey)) {
+                console.log(`🚫 [BLOCKED] 送信中メッセージへの重複アクセス: ${messageKey}`);
+                return;
+            }
+            
+            // 既に送信済みの場合はスキップ
             if (sentMessages.has(responseHash)) {
                 console.log(`⚠️ [DUPLICATE] 重複メッセージ送信をスキップ: ${responseHash}`);
                 return;
@@ -396,18 +406,28 @@ async function handleUserQuestion(message) {
             console.log(`📤 [DEBUG] 単一リプライ送信: ${response.length}文字`);
             console.log(`📤 [CRITICAL] message.reply() 実行開始 - MessageID: ${message.id}`);
             
+            // 送信中フラグをセット
+            replyInProgress.add(messageKey);
             sentMessages.set(responseHash, Date.now());
             
-            const replyResult = await message.reply({
-                content: response,
-                allowedMentions: { repliedUser: true }
-            });
-            
-            console.log(`📤 [CRITICAL] message.reply() 実行完了 - 送信済みメッセージID: ${replyResult.id}`);
+            try {
+                const replyResult = await message.reply({
+                    content: response,
+                    allowedMentions: { repliedUser: true }
+                });
+                
+                console.log(`📤 [CRITICAL] message.reply() 実行完了 - 送信済みメッセージID: ${replyResult.id}`);
+                
+            } finally {
+                // 送信完了後、送信中フラグを解除
+                replyInProgress.delete(messageKey);
+                console.log(`🧹 [CLEANUP] 送信中フラグ解除: ${messageKey}`);
+            }
             
             // 重複防止キャッシュのクリーンアップ
             setTimeout(() => {
                 sentMessages.delete(responseHash);
+                console.log(`🧹 [CLEANUP] レスポンスハッシュ削除: ${responseHash}`);
             }, MESSAGE_CACHE_DURATION);
         }
         
