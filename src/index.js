@@ -95,18 +95,13 @@ setInterval(() => {
 
 // メッセージ重複防止システム（強化版）
 client.on(Events.MessageCreate, async (message) => {
-    // 🔥 緊急デバッグ: Bot自身のメッセージ詳細確認
-    if (message.author.bot || message.author.system) {
-        console.log(`🤖 [重要] Bot/Systemメッセージ詳細:`);
-        console.log(`   ID: ${message.id}`);
-        console.log(`   作成者: ${message.author.tag} (${message.author.id})`);
-        console.log(`   Bot判定: ${message.author.bot}`);
-        console.log(`   System判定: ${message.author.system}`);
-        console.log(`   タイムスタンプ: ${new Date(message.createdTimestamp).toISOString()}`);
-        console.log(`   内容: "${message.content.substring(0, 100)}..."`);
-        console.log(`   クライアントUser: ${client.user.tag} (${client.user.id})`);
-        console.log(`   同一判定: ${message.author.id === client.user.id}`);
-        return;
+    // 🔥 緊急修正: Bot・System・Webhookメッセージの完全除外
+    if (message.author.bot || message.author.system || message.webhookId) {
+        // デバッグログのみ出力して処理終了
+        if (message.author.bot && message.author.id === client.user.id) {
+            console.log(`🤖 [DEBUG] 自分のBot応答を検出: ${message.id} - "${message.content.substring(0, 50)}..."`);
+        }
+        return; // ここで完全に処理終了
     }
     
     // 重複メッセージチェック（強化版）
@@ -128,12 +123,6 @@ client.on(Events.MessageCreate, async (message) => {
         processedMessages.delete(messageHash);
         console.log(`🗑️ キャッシュ削除: ${messageHash}`);
     }, MESSAGE_CACHE_DURATION);
-    
-    // Webhook判定
-    if (message.webhookId) {
-        console.log(`🔗 Webhookメッセージをスキップ: ${message.webhookId}`);
-        return;
-    }
     
     // コマンドプレフィックスのスキップ
     if (message.content.startsWith('!') || message.content.startsWith('/')) {
