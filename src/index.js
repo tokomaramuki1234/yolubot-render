@@ -364,7 +364,7 @@ async function handleUserQuestion(message) {
             console.log(`📤 [DEBUG] 1回目のリプライ送信: ${chunks[0].length}文字`);
             await message.reply({
                 content: chunks[0],
-                allowedMentions: { repliedUser: false }
+                allowedMentions: { repliedUser: true }
             });
             
             for (let i = 1; i < chunks.length; i++) {
@@ -376,7 +376,7 @@ async function handleUserQuestion(message) {
             console.log(`📤 [DEBUG] 単一リプライ送信: ${response.length}文字`);
             await message.reply({
                 content: response,
-                allowedMentions: { repliedUser: false }
+                allowedMentions: { repliedUser: true }
             });
         }
         
@@ -390,7 +390,7 @@ async function handleUserQuestion(message) {
             console.log(`🚨 [DEBUG] エラー応答送信: ${userTag}`);
             await message.reply({
                 content: '申し訳ございません。エラーが発生しました。しばらく時間をおいて再度お試しください。',
-                allowedMentions: { repliedUser: false }
+                allowedMentions: { repliedUser: true }
             });
         } catch (replyError) {
             console.error(`❌ [ERROR] エラー返信送信失敗 (${userTag}):`, replyError);
