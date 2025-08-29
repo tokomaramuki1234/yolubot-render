@@ -3,6 +3,12 @@ const axios = require('axios');
 /**
  * WebSearchService - 複数のWeb検索APIを統合したサービスクラス
  * 優先順位: Serper API → Google Custom Search API → フォールバック
+ * 
+ * 改善点:
+ * - ヘルスチェック機能の追加
+ * - エラーハンドリングの強化
+ * - 統計情報の詳細化
+ * - タイムアウト制御
  */
 class WebSearchService {
     constructor() {
@@ -31,6 +37,12 @@ class WebSearchService {
             resetDate: new Date().toDateString()
         };
 
+        // デバッグ情報を追加
+        console.log('🔧 Environment Variables Debug:');
+        console.log('SERPER_API_KEY:', process.env.SERPER_API_KEY ? `${process.env.SERPER_API_KEY.substring(0, 8)}...` : 'NOT SET');
+        console.log('GOOGLE_CSE_API_KEY:', process.env.GOOGLE_CSE_API_KEY ? `${process.env.GOOGLE_CSE_API_KEY.substring(0, 8)}...` : 'NOT SET');
+        console.log('GOOGLE_CSE_ID:', process.env.GOOGLE_CSE_ID || 'NOT SET');
+        
         console.log('WebSearchService initialized with providers:', {
             serper: this.providers.serper.enabled,
             google: this.providers.google.enabled
@@ -318,6 +330,134 @@ class WebSearchService {
         }
 
         return results;
+    }
+
+    /**
+     * サービスの健全性をチェック
+     */
+    async healthCheck() {
+        const healthStatus = {
+            timestamp: new Date().toISOString(),
+            providers: {},
+            overallStatus: 'ok'
+        };
+
+        // Serper APIの健全性チェック
+        if (this.providers.serper.enabled) {
+            try {
+                // 簡単なテストクエリでAPIをチェック
+                await this.searchWithSerper('test', { maxResults: 1 });
+                healthStatus.providers.serper = {
+                    status: 'healthy',
+                    enabled: true,
+                    apiKey: this.providers.serper.apiKey ? 'configured' : 'missing'
+                };
+            } catch (error) {
+                healthStatus.providers.serper = {
+                    status: 'unhealthy',
+                    enabled: true,
+                    error: error.message,
+                    apiKey: this.providers.serper.apiKey ? 'configured' : 'missing'
+                };
+                healthStatus.overallStatus = 'degraded';
+            }
+        } else {
+            healthStatus.providers.serper = {
+                status: 'disabled',
+                enabled: false,
+                reason: 'API key not configured'
+            };
+        }
+
+        // Google Custom Search APIの健全性チェック
+        if (this.providers.google.enabled) {
+            try {
+                // 簡単なテストクエリでAPIをチェック
+                await this.searchWithGoogle('test', { maxResults: 1 });
+                healthStatus.providers.google = {
+                    status: 'healthy',
+                    enabled: true,
+                    apiKey: this.providers.google.apiKey ? 'configured' : 'missing',
+                    searchEngineId: this.providers.google.searchEngineId ? 'configured' : 'missing'
+                };
+            } catch (error) {
+                healthStatus.providers.google = {
+                    status: 'unhealthy',
+                    enabled: true,
+                    error: error.message,
+                    apiKey: this.providers.google.apiKey ? 'configured' : 'missing',
+                    searchEngineId: this.providers.google.searchEngineId ? 'configured' : 'missing'
+                };
+                if (healthStatus.overallStatus !== 'degraded') {
+                    healthStatus.overallStatus = healthStatus.providers.serper?.status === 'healthy' ? 'ok' : 'degraded';
+                }
+            }
+        } else {
+            healthStatus.providers.google = {
+                status: 'disabled',
+                enabled: false,
+                reason: 'API key or Search Engine ID not configured'
+            };
+        }
+
+        // 全プロバイダーが無効の場合
+        if (!this.providers.serper.enabled && !this.providers.google.enabled) {
+            healthStatus.overallStatus = 'error';
+        }
+
+        return healthStatus;
+    }
+
+    /**
+     * 使用統計情報を取得
+     */
+    getUsageStats() {
+        return {
+            today: {
+                serper: this.dailyUsage.serper,
+                google: this.dailyUsage.google,
+                resetDate: this.dailyUsage.resetDate
+            },
+            providers: [
+                {
+                    name: 'Serper API',
+                    enabled: this.providers.serper.enabled,
+                    rateLimit: `${this.providers.serper.rateLimit}/month`,
+                    costPer1k: this.providers.serper.costPer1k
+                },
+                {
+                    name: 'Google Custom Search',
+                    enabled: this.providers.google.enabled,
+                    rateLimit: `${this.providers.google.rateLimit}/day`,
+                    costPer1k: this.providers.google.costPer1k
+                }
+            ],
+            cacheSize: this.cache.size
+        };
+    }
+
+    /**
+     * タイムアウト付きPromise
+     */
+    timeoutPromise(ms, operation = 'Operation') {
+        return new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`${operation} timed out after ${ms}ms`)), ms)
+        );
+    }
+
+    /**
+     * レート制限チェック（日次リセット付き）
+     */
+    checkAndResetDailyUsage() {
+        const today = new Date().toDateString();
+        if (this.dailyUsage.resetDate !== today) {
+            this.dailyUsage = {
+                serper: 0,
+                google: 0,
+                resetDate: today
+            };
+            console.log('🔄 Daily usage counters reset');
+        }
     }
 }
 

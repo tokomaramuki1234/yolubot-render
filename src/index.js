@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits, Events } = require('discord.js');
 const cron = require('node-cron');
 const GeminiService = require('./services/geminiService');
 const AdvancedNewsService = require('./services/advancedNewsService');
+const WebSearchService = require('./services/webSearchService');
 const DatabaseService = require('./services/databaseService');
 const PermissionChecker = require('./utils/permissionChecker');
 
@@ -15,13 +16,22 @@ const client = new Client({
 });
 
 const geminiService = new GeminiService();
-const newsService = new AdvancedNewsService();
+const webSearchService = new WebSearchService();
+const newsService = new AdvancedNewsService(webSearchService);
 const databaseService = new DatabaseService();
 
 client.once(Events.ClientReady, async (c) => {
     console.log(`Ready! Logged in as ${c.user.tag}`);
     
     await databaseService.init();
+    
+    // WebSearchServiceとAdvancedNewsServiceの実装確認
+    try {
+        const health = await newsService.healthCheck();
+        console.log('📊 AdvancedNewsService Health Check:', health);
+    } catch (error) {
+        console.error('❌ AdvancedNewsService Health Check Failed:', error.message);
+    }
     
     // 権限チェックを実行
     await PermissionChecker.logPermissionCheck(client, process.env.CHANNEL_ID);
@@ -220,7 +230,15 @@ async function handleNewsCommand(interaction) {
     await interaction.deferReply();
     
     try {
+        console.log('🔍 Starting news search with debug information...');
+        const startTime = Date.now();
+        
         const newsArticles = await newsService.getBoardGameNews(false); // isScheduled = false (6時間)
+        
+        // 検索実行後の統計情報確認
+        const stats = newsService.getSearchStats();
+        console.log('📊 Search Stats:', JSON.stringify(stats, null, 2));
+        console.log(`⏱️ Search completed in ${Date.now() - startTime}ms`);
         
         if (newsArticles.length === 1 && newsArticles[0].isNoNewsMessage) {
             await interaction.editReply(newsArticles[0].description);
