@@ -18,15 +18,25 @@ const client = new Client({
 // 重複防止・レート制限対策
 const userCooldowns = new Map();
 const processingMessages = new Set();
+const processedMessages = new Map(); // 新規追加：メッセージ重複防止
 const COOLDOWN_DURATION = 5000; // 5秒
+const MESSAGE_CACHE_DURATION = 30000; // 30秒
 
 const geminiService = new GeminiService();
 const webSearchService = new WebSearchService();
 const newsService = new AdvancedNewsService(webSearchService);
 const databaseService = new DatabaseService();
 
+// Gateway接続監視
+let connectionCount = 0;
+let isConnected = false;
+
 client.once(Events.ClientReady, async (c) => {
-    console.log(`Ready! Logged in as ${c.user.tag}`);
+    connectionCount++;
+    isConnected = true;
+    console.log(`🔗 [CONNECTION #${connectionCount}] Discord Gateway接続完了`);
+    console.log(`🤖 Bot User: ${c.user.tag} (ID: ${c.user.id})`);
+    console.log(`📊 接続状態: ${client.ws.status}`);
     
     try {
         await databaseService.init();
@@ -63,12 +73,61 @@ client.once(Events.ClientReady, async (c) => {
     });
 });
 
+client.on('disconnect', () => {
+    isConnected = false;
+    console.log(`❌ [CONNECTION #${connectionCount}] Discord Gateway切断`);
+});
+
+client.on('reconnecting', () => {
+    console.log(`🔄 [CONNECTION #${connectionCount}] Discord Gateway再接続中...`);
+});
+
+client.on('resume', () => {
+    console.log(`▶️ [CONNECTION #${connectionCount}] Discord Gateway接続復旧`);
+});
+
+// WebSocket状態監視
+setInterval(() => {
+    if (isConnected) {
+        console.log(`📡 WebSocket状態: ${client.ws.status} | Ping: ${client.ws.ping}ms | 接続数: ${connectionCount}`);
+    }
+}, 300000); // 5分毎
+
+// メッセージ重複防止システム（強化版）
 client.on(Events.MessageCreate, async (message) => {
-    // 厳密なBot判定
+    // 🔥 緊急デバッグ: Bot自身のメッセージ詳細確認
     if (message.author.bot || message.author.system) {
-        console.log(`🤖 Bot或いはSystemメッセージをスキップ: ${message.author.tag}`);
+        console.log(`🤖 [重要] Bot/Systemメッセージ詳細:`);
+        console.log(`   ID: ${message.id}`);
+        console.log(`   作成者: ${message.author.tag} (${message.author.id})`);
+        console.log(`   Bot判定: ${message.author.bot}`);
+        console.log(`   System判定: ${message.author.system}`);
+        console.log(`   タイムスタンプ: ${new Date(message.createdTimestamp).toISOString()}`);
+        console.log(`   内容: "${message.content.substring(0, 100)}..."`);
+        console.log(`   クライアントUser: ${client.user.tag} (${client.user.id})`);
+        console.log(`   同一判定: ${message.author.id === client.user.id}`);
         return;
     }
+    
+    // 重複メッセージチェック（強化版）
+    const messageHash = `${message.id}-${message.author.id}-${message.createdTimestamp}`;
+    
+    if (processedMessages.has(messageHash)) {
+        console.log(`⚠️ [重要] 重複メッセージ検出: ${messageHash} from ${message.author.tag}`);
+        console.log(`   初回処理時刻: ${new Date(processedMessages.get(messageHash)).toISOString()}`);
+        console.log(`   重複検出時刻: ${new Date().toISOString()}`);
+        return;
+    }
+    
+    // メッセージをキャッシュに追加
+    processedMessages.set(messageHash, Date.now());
+    console.log(`📥 [重要] 新規メッセージ登録: ${messageHash} from ${message.author.tag}`);
+    
+    // 古いキャッシュを削除
+    setTimeout(() => {
+        processedMessages.delete(messageHash);
+        console.log(`🗑️ キャッシュ削除: ${messageHash}`);
+    }, MESSAGE_CACHE_DURATION);
     
     // Webhook判定
     if (message.webhookId) {
@@ -86,9 +145,9 @@ client.on(Events.MessageCreate, async (message) => {
         return;
     }
     
-    // 重複処理防止
+    // 重複処理防止（既存システムとの併用）
     if (processingMessages.has(message.id)) {
-        console.log(`⚠️ 重複処理をスキップ: ${message.id}`);
+        console.log(`⚠️ 既存システムでの重複処理をスキップ: ${message.id}`);
         return;
     }
     
@@ -116,7 +175,7 @@ client.on(Events.MessageCreate, async (message) => {
     processingMessages.add(message.id);
     userCooldowns.set(userId, now + COOLDOWN_DURATION);
     
-    console.log(`📝 ユーザー質問処理開始: ${message.author.tag} - "${message.content.substring(0, 50)}..."`);
+    console.log(`📝 [重要] ユーザー質問処理開始: ${message.author.tag} - "${message.content.substring(0, 50)}..." (Hash: ${messageHash})`);
     
     try {
         await handleUserQuestion(message);
@@ -130,6 +189,8 @@ client.on(Events.MessageCreate, async (message) => {
         setTimeout(() => {
             processingMessages.delete(message.id);
         }, 10 * 60 * 1000);
+        
+        console.log(`🧹 [重要] メッセージ処理完了: ${messageHash}`);
     }
 });
 
@@ -804,7 +865,14 @@ setInterval(() => {
         }
     }
     
-    console.log(`🧹 メモリクリーンアップ完了: クールダウン${userCooldowns.size}件, 処理中${processingMessages.size}件`);
+    // 期限切れのメッセージハッシュを削除
+    for (const [messageHash, timestamp] of processedMessages.entries()) {
+        if (now - timestamp > MESSAGE_CACHE_DURATION) {
+            processedMessages.delete(messageHash);
+        }
+    }
+    
+    console.log(`🧹 メモリクリーンアップ完了: クールダウン${userCooldowns.size}件, 処理中${processingMessages.size}件, メッセージキャッシュ${processedMessages.size}件`);
 }, 60 * 60 * 1000);
 
 // Render.com用の簡易HTTPサーバー（ポートスキャン対策）
@@ -817,15 +885,17 @@ const server = http.createServer((req, res) => {
         status: 'YOLUBot is running',
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
-        version: '2.0.1',
+        version: '2.0.2',
         features: {
             webSearch: 'enabled',
             realTimeNews: 'enabled',
             aiConversation: 'enabled'
         },
-        cooldowns: {
+        debug: {
             activeUsers: userCooldowns.size,
-            processingMessages: processingMessages.size
+            processingMessages: processingMessages.size,
+            messageCache: processedMessages.size,
+            connections: connectionCount
         }
     }));
 });
