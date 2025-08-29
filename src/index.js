@@ -19,6 +19,7 @@ const client = new Client({
 const userCooldowns = new Map();
 const processingMessages = new Set();
 const processedMessages = new Map(); // 新規追加：メッセージ重複防止
+const sentMessages = new Map(); // 送信済みメッセージの重複防止
 const COOLDOWN_DURATION = 5000; // 5秒
 const MESSAGE_CACHE_DURATION = 30000; // 30秒
 
@@ -99,7 +100,8 @@ client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot || message.author.system || message.webhookId) {
         // デバッグログのみ出力して処理終了
         if (message.author.bot && message.author.id === client.user.id) {
-            console.log(`🤖 [DEBUG] 自分のBot応答を検出: ${message.id} - "${message.content.substring(0, 50)}..."`);
+            const timestamp = new Date().toISOString();
+            console.log(`🤖 [DEBUG] ${timestamp} 自分のBot応答を検出: ${message.id} - "${message.content.substring(0, 50)}..."`);
         }
         return; // ここで完全に処理終了
     }
@@ -369,10 +371,14 @@ async function handleUserQuestion(message) {
             const chunks = response.match(/.{1,2000}/g);
             
             console.log(`📤 [DEBUG] 1回目のリプライ送信: ${chunks[0].length}文字`);
-            await message.reply({
+            console.log(`📤 [CRITICAL] message.reply() (長文1) 実行開始 - MessageID: ${message.id}`);
+            
+            const firstReplyResult = await message.reply({
                 content: chunks[0],
                 allowedMentions: { repliedUser: true }
             });
+            
+            console.log(`📤 [CRITICAL] message.reply() (長文1) 実行完了 - 送信済みメッセージID: ${firstReplyResult.id}`);
             
             for (let i = 1; i < chunks.length; i++) {
                 console.log(`📤 [DEBUG] 追加メッセージ送信 ${i+1}/${chunks.length}: ${chunks[i].length}文字`);
@@ -380,11 +386,29 @@ async function handleUserQuestion(message) {
                 await message.channel.send(chunks[i]);
             }
         } else {
+            // 重複送信防止チェック
+            const responseHash = `${message.id}-${response.slice(0, 50)}`;
+            if (sentMessages.has(responseHash)) {
+                console.log(`⚠️ [DUPLICATE] 重複メッセージ送信をスキップ: ${responseHash}`);
+                return;
+            }
+            
             console.log(`📤 [DEBUG] 単一リプライ送信: ${response.length}文字`);
-            await message.reply({
+            console.log(`📤 [CRITICAL] message.reply() 実行開始 - MessageID: ${message.id}`);
+            
+            sentMessages.set(responseHash, Date.now());
+            
+            const replyResult = await message.reply({
                 content: response,
                 allowedMentions: { repliedUser: true }
             });
+            
+            console.log(`📤 [CRITICAL] message.reply() 実行完了 - 送信済みメッセージID: ${replyResult.id}`);
+            
+            // 重複防止キャッシュのクリーンアップ
+            setTimeout(() => {
+                sentMessages.delete(responseHash);
+            }, MESSAGE_CACHE_DURATION);
         }
         
         console.log(`✅ [DEBUG] AI応答送信完了: ${userTag} (メッセージID: ${messageId})`);
@@ -395,10 +419,14 @@ async function handleUserQuestion(message) {
         
         try {
             console.log(`🚨 [DEBUG] エラー応答送信: ${userTag}`);
-            await message.reply({
+            console.log(`🚨 [CRITICAL] エラー用message.reply() 実行開始 - MessageID: ${message.id}`);
+            
+            const errorReplyResult = await message.reply({
                 content: '申し訳ございません。エラーが発生しました。しばらく時間をおいて再度お試しください。',
                 allowedMentions: { repliedUser: true }
             });
+            
+            console.log(`🚨 [CRITICAL] エラー用message.reply() 実行完了 - 送信済みメッセージID: ${errorReplyResult.id}`);
         } catch (replyError) {
             console.error(`❌ [ERROR] エラー返信送信失敗 (${userTag}):`, replyError);
         }
