@@ -362,7 +362,10 @@ async function handleUserQuestion(message) {
             const chunks = response.match(/.{1,2000}/g);
             
             console.log(`📤 [DEBUG] 1回目のリプライ送信: ${chunks[0].length}文字`);
-            await message.reply(chunks[0]);
+            await message.reply({
+                content: chunks[0],
+                allowedMentions: { repliedUser: false }
+            });
             
             for (let i = 1; i < chunks.length; i++) {
                 console.log(`📤 [DEBUG] 追加メッセージ送信 ${i+1}/${chunks.length}: ${chunks[i].length}文字`);
@@ -371,7 +374,10 @@ async function handleUserQuestion(message) {
             }
         } else {
             console.log(`📤 [DEBUG] 単一リプライ送信: ${response.length}文字`);
-            await message.reply(response);
+            await message.reply({
+                content: response,
+                allowedMentions: { repliedUser: false }
+            });
         }
         
         console.log(`✅ [DEBUG] AI応答送信完了: ${userTag} (メッセージID: ${messageId})`);
@@ -382,7 +388,10 @@ async function handleUserQuestion(message) {
         
         try {
             console.log(`🚨 [DEBUG] エラー応答送信: ${userTag}`);
-            await message.reply('申し訳ございません。エラーが発生しました。しばらく時間をおいて再度お試しください。');
+            await message.reply({
+                content: '申し訳ございません。エラーが発生しました。しばらく時間をおいて再度お試しください。',
+                allowedMentions: { repliedUser: false }
+            });
         } catch (replyError) {
             console.error(`❌ [ERROR] エラー返信送信失敗 (${userTag}):`, replyError);
         }
