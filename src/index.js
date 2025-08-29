@@ -525,18 +525,61 @@ async function handleWebSearchCommand(interaction) {
     try {
         // 管理者権限チェック
         if (!interaction.member.permissions.has('Administrator')) {
-            await interaction.reply({ content: 'このコマンドは管理者限定です。', ephemeral: true });
+            await interaction.reply({ 
+                content: 'このコマンドは管理者限定です。', 
+                ephemeral: true 
+            });
             return;
         }
 
         await interaction.deferReply();
 
-        // WebSearch統計と健全性チェック
-        const [stats, health] = await Promise.all([
-            newsService.getWebSearchStats(),
-            newsService.checkWebSearchHealth()
-        ]);
+        // 安全な統計取得
+        let stats = {
+            today: { serper: 0, google: 0, resetDate: new Date().toDateString() },
+            providers: [],
+            cacheSize: 0,
+            error: '統計情報取得中にエラーが発生しました'
+        };
 
+        let health = {
+            serper: { status: 'unknown', reason: 'チェック中にエラーが発生しました' },
+            google: { status: 'unknown', reason: 'チェック中にエラーが発生しました' }
+        };
+
+        try {
+            // newsServiceが利用可能かチェック
+            if (newsService && typeof newsService.getWebSearchStats === 'function') {
+                stats = newsService.getWebSearchStats();
+            } else {
+                console.warn('getWebSearchStats method not available');
+                stats.error = 'getWebSearchStats メソッドが利用できません';
+            }
+        } catch (statsError) {
+            console.error('Stats retrieval error:', statsError);
+            stats.error = `統計取得エラー: ${statsError.message}`;
+        }
+
+        try {
+            // ヘルスチェック
+            if (newsService && typeof newsService.checkWebSearchHealth === 'function') {
+                health = await newsService.checkWebSearchHealth();
+            } else {
+                console.warn('checkWebSearchHealth method not available');
+                health = {
+                    serper: { status: 'unknown', reason: 'checkWebSearchHealth メソッドが利用できません' },
+                    google: { status: 'unknown', reason: 'checkWebSearchHealth メソッドが利用できません' }
+                };
+            }
+        } catch (healthError) {
+            console.error('Health check error:', healthError);
+            health = {
+                serper: { status: 'error', error: healthError.message },
+                google: { status: 'error', error: healthError.message }
+            };
+        }
+
+        // 結果表示用のembed作成
         const embed = {
             title: '🔍 WebSearch システム状況',
             fields: [
@@ -547,9 +590,11 @@ async function handleWebSearchCommand(interaction) {
                 },
                 {
                     name: '⚙️ プロバイダー設定',
-                    value: stats.providers.map(p => 
-                        `${p.name}: ${p.enabled ? '✅' : '❌'} (制限: ${p.rateLimit}, コスト: $${p.costPer1k}/1k)`
-                    ).join('\n'),
+                    value: stats.providers.length > 0 ? 
+                        stats.providers.map(p => 
+                            `${p.name}: ${p.enabled ? '✅' : '❌'} (制限: ${p.rateLimit})`
+                        ).join('\n') : 
+                        'プロバイダー情報取得エラー',
                     inline: true
                 },
                 {
@@ -559,23 +604,50 @@ async function handleWebSearchCommand(interaction) {
                 },
                 {
                     name: '🏥 健全性チェック',
-                    value: Object.entries(health).map(([provider, status]) => 
-                        `${provider}: ${status.status === 'healthy' ? '✅' : status.status === 'disabled' ? '⚠️' : '❌'} ${status.reason || status.error || ''}`
-                    ).join('\n'),
+                    value: Object.entries(health).map(([provider, status]) => {
+                        const statusIcon = status.status === 'healthy' ? '✅' : 
+                                       status.status === 'disabled' ? '⚠️' : '❌';
+                        const reason = status.reason || status.error || '';
+                        return `${provider}: ${statusIcon} ${reason}`;
+                    }).join('\n'),
                     inline: false
                 }
             ],
             color: 0x00ff00,
             timestamp: new Date().toISOString(),
             footer: {
-                text: 'WebSearch統合システム v1.0'
+                text: 'WebSearch統合システム v2.0.1'
             }
         };
 
+        // エラー情報がある場合は色を変更
+        if (stats.error) {
+            embed.color = 0xff9900; // オレンジ
+            embed.fields.unshift({
+                name: '⚠️ エラー情報',
+                value: stats.error,
+                inline: false
+            });
+        }
+
         await interaction.editReply({ embeds: [embed] });
+
     } catch (error) {
         console.error('Error in websearch command:', error);
-        await interaction.editReply('WebSearch統計の取得中にエラーが発生しました。');
+        
+        const errorMessage = 'WebSearch統計の取得中にエラーが発生しました。\n\n' +
+                          `エラー詳細: ${error.message}\n` +
+                          '管理者に連絡して、ログを確認してください。';
+        
+        try {
+            if (interaction.deferred) {
+                await interaction.editReply(errorMessage);
+            } else {
+                await interaction.reply({ content: errorMessage, ephemeral: true });
+            }
+        } catch (replyError) {
+            console.error('Failed to send error message:', replyError);
+        }
     }
 }
 
