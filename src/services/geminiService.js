@@ -4,11 +4,80 @@ class GeminiService {
     constructor() {
         this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         this.model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        
+        // レート制限対策
+        this.requestCount = 0;
+        this.dailyLimit = 45; // 安全のため少し低く設定
+        this.lastResetDate = new Date().toDateString();
+        this.requestQueue = [];
+        this.isProcessing = false;
+    }
+
+    async checkRateLimit() {
+        const today = new Date().toDateString();
+        
+        // 日付が変わったらリセット
+        if (this.lastResetDate !== today) {
+            this.requestCount = 0;
+            this.lastResetDate = today;
+        }
+
+        return this.requestCount < this.dailyLimit;
+    }
+
+    async makeRequest(prompt, fallbackResponse = '申し訳ございません。現在、AI機能が一時的に利用できません。') {
+        return new Promise((resolve) => {
+            this.requestQueue.push({ prompt, fallbackResponse, resolve });
+            this.processQueue();
+        });
+    }
+
+    async processQueue() {
+        if (this.isProcessing || this.requestQueue.length === 0) return;
+        
+        this.isProcessing = true;
+
+        while (this.requestQueue.length > 0) {
+            const { prompt, fallbackResponse, resolve } = this.requestQueue.shift();
+            
+            if (!await this.checkRateLimit()) {
+                console.warn(`⚠️ Gemini API制限に達しました (${this.requestCount}/${this.dailyLimit}). フォールバック応答を使用`);
+                resolve(fallbackResponse);
+                continue;
+            }
+
+            try {
+                this.requestCount++;
+                const result = await this.model.generateContent(prompt);
+                const response = await result.response;
+                const text = response.text();
+                
+                console.log(`✅ Gemini API使用: ${this.requestCount}/${this.dailyLimit}`);
+                resolve(text);
+                
+                // リクエスト間の待機（レート制限対策）
+                if (this.requestQueue.length > 0) {
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+                
+            } catch (error) {
+                console.error('❌ Gemini API error:', error.message);
+                
+                if (error.status === 429) {
+                    // レート制限に達した場合
+                    this.requestCount = this.dailyLimit; // 今日はもう使用しない
+                    console.warn('🚫 Gemini API レート制限に達しました。今日はフォールバック応答のみ使用します。');
+                }
+                
+                resolve(fallbackResponse);
+            }
+        }
+
+        this.isProcessing = false;
     }
 
     async summarizeArticle(article) {
-        try {
-            const prompt = `
+        const prompt = `
 ボードゲームニュース記事の要約をお願いします。
 以下の記事を日本語で簡潔に要約してください（300文字程度）：
 
@@ -21,20 +90,15 @@ URL: ${article.url}
 - ボードゲーム愛好者にとって興味深い点を強調
 - なぜこの情報が重要なのかを説明
 - 300文字程度の読みやすい日本語で
-            `;
+        `;
 
-            const result = await this.model.generateContent(prompt);
-            const response = await result.response;
-            return response.text();
-        } catch (error) {
-            console.error('Error summarizing article:', error);
-            return '記事の要約を生成できませんでした。';
-        }
+        const fallback = `📰 **${article.title}**\n\n${article.description || 'ボードゲーム関連のニュース記事です。'}\n\n詳細は記事をご覧ください。`;
+
+        return await this.makeRequest(prompt, fallback);
     }
 
     async generateResponse(userMessage, conversationHistory = [], userPreferences = null) {
-        try {
-            let contextPrompt = `
+        let contextPrompt = `
 あなたはボードゲーム専門のDiscord BOTです。以下の特徴があります：
 - ボードゲームに関する知識が豊富
 - フレンドリーで親しみやすい口調
@@ -44,104 +108,80 @@ URL: ${article.url}
 
 ${userPreferences ? `
 ユーザーの好み・特徴：
-- 好みのジャンル: ${userPreferences.preferences.join(', ')}
-- 興味のあるトピック: ${userPreferences.interests.join(', ')}
-- 経験レベル: ${userPreferences.experience_level}
-- 好みのメカニクス: ${userPreferences.favorite_mechanics.join(', ')}
+- 好みのジャンル: ${userPreferences.preferences?.join(', ') || 'まだ学習中'}
+- 興味のあるトピック: ${userPreferences.interests?.join(', ') || 'まだ学習中'}
+- 経験レベル: ${userPreferences.experience_level || 'まだ学習中'}
+- 好みのメカニクス: ${userPreferences.favorite_mechanics?.join(', ') || 'まだ学習中'}
 ` : ''}
 
-過去の会話履歴：
-${conversationHistory.map(conv => `ユーザー: ${conv.user_message}\nBOT: ${conv.bot_response}`).join('\n')}
+${conversationHistory.length > 0 ? `
+最近の会話履歴：
+${conversationHistory.map(msg => `ユーザー: ${msg.user_message}\nBOT: ${msg.bot_response}`).join('\n\n')}
+` : ''}
 
 現在のユーザーメッセージ: ${userMessage}
 
-ユーザーの好みや経験レベルを考慮して、適切で個人化された回答をしてください：
-            `;
+上記を考慮して、親しみやすく有用な回答をしてください。`;
 
-            const result = await this.model.generateContent(contextPrompt);
-            const response = await result.response;
-            return response.text();
-        } catch (error) {
-            console.error('Error generating response:', error);
-            return 'すみません、回答の生成中にエラーが発生しました。もう一度お試しください。';
-        }
+        const fallback = `こんにちは！ボードゲームについて何でもお聞きください。
+
+🎲 ゲーム推薦
+🎮 ルール説明  
+📰 最新ニュース
+🎯 コミュニティ情報
+
+どのようなことをお手伝いできますか？`;
+
+        return await this.makeRequest(contextPrompt, fallback);
     }
 
     async analyzeUserPreferences(conversationHistory) {
-        try {
-            const prompt = `
-以下の会話履歴から、ユーザーのボードゲームの好みや興味を分析してください：
+        const prompt = `
+以下の会話履歴から、ユーザーのボードゲームに関する好みを分析し、
+JSONフォーマットで出力してください：
 
-${conversationHistory.map(conv => `ユーザー: ${conv.user_message}\nBOT: ${conv.bot_response}`).join('\n')}
+会話履歴：
+${conversationHistory.map(msg => `ユーザー: ${msg.user_message}\nBOT: ${msg.bot_response}`).join('\n\n')}
 
-以下の形式でJSON形式で回答してください：
+分析結果をこのJSONフォーマットで出力：
 {
-    "preferences": ["好みのジャンル1", "好みのジャンル2"],
-    "interests": ["興味のあるトピック1", "興味のあるトピック2"],
-    "experience_level": "初心者/中級者/上級者",
-    "favorite_mechanics": ["好みのメカニクス1", "好みのメカニクス2"]
-}
-            `;
+  "preferences": ["戦略ゲーム", "協力ゲーム", "etc"],
+  "interests": ["新作情報", "コンポーネント", "etc"], 
+  "experience_level": "初心者/中級者/上級者",
+  "favorite_mechanics": ["ワーカープレイスメント", "ドラフト", "etc"],
+  "play_style": "競争的/協力的/カジュアル"
+}`;
 
-            const result = await this.model.generateContent(prompt);
-            const response = await result.response;
-            
-            try {
-                return JSON.parse(response.text());
-            } catch (parseError) {
-                console.error('Error parsing preferences JSON:', parseError);
-                return null;
-            }
+        const fallback = JSON.stringify({
+            preferences: ["まだ学習中"],
+            interests: ["まだ学習中"],
+            experience_level: "まだ学習中",
+            favorite_mechanics: ["まだ学習中"],
+            play_style: "まだ学習中"
+        });
+
+        try {
+            const result = await this.makeRequest(prompt, fallback);
+            return JSON.parse(result);
         } catch (error) {
-            console.error('Error analyzing user preferences:', error);
-            return null;
+            console.error('❌ ユーザー設定分析エラー:', error);
+            return JSON.parse(fallback);
         }
     }
 
-    async rankArticles(articles) {
-        try {
-            const prompt = `
-以下のボードゲームニュース記事を信憑性・話題性・速報性の3つの観点から評価し、ランク付けしてください。
+    // 今日の使用状況を取得
+    getUsageStats() {
+        return {
+            requestsUsed: this.requestCount,
+            dailyLimit: this.dailyLimit,
+            resetDate: this.lastResetDate,
+            remaining: Math.max(0, this.dailyLimit - this.requestCount)
+        };
+    }
 
-評価基準：
-1. 信憑性 (1-10点): 情報源の信頼性、内容の具体性、事実に基づいているか
-2. 話題性 (1-10点): ボードゲーム愛好者にとっての関心度、影響の大きさ
-3. 速報性 (1-10点): 情報の新しさ、リアルタイム性
-
-記事リスト：
-${articles.map((article, index) => `
-記事${index}: 
-タイトル: ${article.title}
-概要: ${article.description}
-情報源: ${article.source}
-URL: ${article.url}
-`).join('')}
-
-以下のJSON形式で回答してください：
-[
-  {"id": 0, "credibility": 8, "relevance": 9, "urgency": 7, "total": 24},
-  {"id": 1, "credibility": 6, "relevance": 7, "urgency": 8, "total": 21}
-]
-
-total = credibility + relevance + urgency で計算し、totalの降順でソートしてください。
-            `;
-
-            const result = await this.model.generateContent(prompt);
-            const response = await result.response;
-            
-            try {
-                const ranking = JSON.parse(response.text());
-                return ranking.sort((a, b) => b.total - a.total);
-            } catch (parseError) {
-                console.error('Error parsing ranking JSON:', parseError);
-                // JSONパースに失敗した場合は元の順序を返す
-                return articles.map((_, index) => ({ id: index, total: index }));
-            }
-        } catch (error) {
-            console.error('Error ranking articles:', error);
-            // エラーの場合は元の順序を返す
-            return articles.map((_, index) => ({ id: index, total: index }));
-        }
+    // 使用可能かチェック
+    isAvailable() {
+        return this.checkRateLimit();
     }
 }
 

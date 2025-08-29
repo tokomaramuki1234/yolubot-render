@@ -20,7 +20,8 @@
       "Bash(cmd /c:*)",
       "Bash(wmic process where:*)",
       "Bash(tasklist:*)",
-      "Bash(tskill:*)"
+      "Bash(tskill:*)",
+      "Bash(del \"C:\\Users\\Endeavor\\Documents\\001-YOLUBE\\bot_yomo\\src\\services\\test_search.js\")"
     ],
     "deny": []
   }
