@@ -24,8 +24,8 @@ const MESSAGE_CACHE_DURATION = 30000; // 30秒
 
 const geminiService = new GeminiService();
 const webSearchService = new WebSearchService();
-const newsService = new AdvancedNewsService(webSearchService);
 const databaseService = new DatabaseService();
+const newsService = new AdvancedNewsService(webSearchService, databaseService);
 
 // Gateway接続監視
 let connectionCount = 0;

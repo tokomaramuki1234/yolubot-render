@@ -15,7 +15,12 @@
       "Bash(cp:*)",
       "Bash(taskkill:*)",
       "Bash(del database.sqlite)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(git pull:*)",
+      "Bash(cmd /c:*)",
+      "Bash(wmic process where:*)",
+      "Bash(tasklist:*)",
+      "Bash(tskill:*)"
     ],
     "deny": []
   }

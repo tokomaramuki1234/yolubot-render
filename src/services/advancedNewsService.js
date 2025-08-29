@@ -2,9 +2,10 @@ const DatabaseService = require('./databaseService');
 const WebSearchService = require('./webSearchService');
 
 class AdvancedNewsService {
-    constructor() {
-        this.dbService = new DatabaseService();
-        this.webSearchService = new WebSearchService();
+    constructor(webSearchService = null, databaseService = null) {
+        // 引数で渡されたserviceを使用、なければ新規作成
+        this.dbService = databaseService || new DatabaseService();
+        this.webSearchService = webSearchService || new WebSearchService();
         this.searchStats = {
             totalSearches: 0,
             successfulSearches: 0,
