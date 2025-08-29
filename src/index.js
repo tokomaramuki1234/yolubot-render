@@ -327,7 +327,15 @@ async function handleUserQuestion(message) {
     const userId = message.author.id;
     const userTag = message.author.tag;
     
-    console.log(`🔍 [DEBUG] handleUserQuestion開始: ${userTag} (${messageId})`);
+    console.log(`🔍 [CRITICAL] handleUserQuestion開始: ${userTag} (${messageId}) - ${new Date().toISOString()}`);
+    
+    // 🔥 厳密な重複チェック
+    const executionKey = `execution_${messageId}`;
+    if (global[executionKey]) {
+        console.log(`🚫 [CRITICAL] handleUserQuestion重複実行をブロック: ${messageId}`);
+        return;
+    }
+    global[executionKey] = true;
     
     try {
         // 入力指示の送信
@@ -450,6 +458,10 @@ async function handleUserQuestion(message) {
         } catch (replyError) {
             console.error(`❌ [ERROR] エラー返信送信失敗 (${userTag}):`, replyError);
         }
+    } finally {
+        // 🔥 実行フラグをクリーンアップ
+        delete global[executionKey];
+        console.log(`🧹 [CRITICAL] 実行フラグクリーンアップ完了: ${messageId} - ${new Date().toISOString()}`);
     }
 }
 
